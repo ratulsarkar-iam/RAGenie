@@ -1,0 +1,153 @@
+# RAG Chatbot Configuration
+# This file controls all aspects of the chatbot behavior
+
+# Operational Mode
+# - "hybrid": Run both chatbot web UI and MCP server (default)
+# - "chatbot": Run only chatbot web UI without MCP server
+# - "mcp_server": Run only MCP server without LLM (headless mode)
+mode: "hybrid"
+
+# LLM Configuration
+llm:
+  # Provider: "ollama" for local Ollama, "huggingface" for HuggingFace models
+  provider: "ollama"
+  
+  # Model name (used when multi_model is not configured)
+  # For Ollama: "llama3.2", "mistral", "codellama", etc.
+  # For HuggingFace: "mistralai/Mistral-7B-Instruct-v0.2", "meta-llama/Llama-2-7b-chat-hf", etc.
+  model_name: "llama3.2"
+  
+  # Ollama base URL (only used when provider is "ollama")
+  base_url: "http://localhost:11434"
+  
+  # Generation parameters
+  max_tokens: 512
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 50
+  
+  # HuggingFace-specific settings (only used when provider is "huggingface")
+  # Quantization level: "4bit", "8bit", or "none"
+  # Note: bitsandbytes quantization only works with CUDA, not MPS
+  quantization: "none"
+  
+  # Device: "mps" for Mac M3, "cuda" for NVIDIA GPU, "cpu" for CPU only
+  device: "mps"
+  
+  # Multi-model configuration (optional)
+  # When enabled, different models are used for different purposes
+  multi_model:
+    reasoning:
+      provider: "ollama"
+      model_name: "deepseek-r1:1.5b"
+      base_url: "http://localhost:11434"
+      max_tokens: 512
+      temperature: 0.3
+      top_p: 0.9
+      top_k: 50
+      role: "reasoning"
+    
+    main:
+      provider: "ollama"
+      model_name: "gemma4:e2b-it-q4_K_M"
+      base_url: "http://localhost:11434"
+      max_tokens: 512
+      temperature: 0.7
+      top_p: 0.9
+      top_k: 50
+      role: "main"
+    
+    fallback:
+      provider: "ollama"
+      model_name: "qwen2.5:7b"
+      base_url: "http://localhost:11434"
+      max_tokens: 512
+      temperature: 0.7
+      top_p: 0.9
+      top_k: 50
+      role: "fallback"
+
+# RAG System Configuration
+rag:
+  # Storage backend: "page_index" (current) or "vector_db" (future)
+  storage_type: "page_index"
+  
+  # Document chunking parameters
+  chunk_size: 1000
+  chunk_overlap: 200
+  
+  # Retrieval settings
+  top_k: 3
+  
+  # Index persistence path
+  index_path: "data/index/page_index.json"
+
+# Internet Search Configuration
+search:
+  # Search provider: "duckduckgo" (no API key required)
+  provider: "duckduckgo"
+  
+  # Maximum number of search results to retrieve
+  max_results: 5
+  
+  # Cache settings
+  cache_ttl_seconds: 3600
+
+# Web Server Configuration
+server:
+  host: "localhost"
+  port: 8000
+  
+  # CORS settings for frontend
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+
+# MCP Server Configuration
+mcp_server:
+  # Enable MCP server (auto-enabled in hybrid/mcp_server modes)
+  enabled: true
+  
+  # Transport protocol: "stdio" or "sse"
+  # - stdio: For Claude Desktop integration (process-based)
+  # - sse: For HTTP-based clients (Server-Sent Events)
+  transport: "sse"
+  
+  # Server name (shown to MCP clients)
+  name: "rag-search-server"
+  
+  # Port for SSE transport (ignored for stdio)
+  port: 8001
+
+# MCP Client Configuration (for connecting to external MCP servers)
+mcp_clients: []
+  # Example MCP server configurations
+  # Uncomment and configure as needed
+  
+  # - name: "filesystem"
+  #   enabled: false
+  #   transport: "stdio"
+  #   command: "npx"
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"]
+  
+  # - name: "github"
+  #   enabled: false
+  #   transport: "stdio"
+  #   command: "npx"
+  #   args: ["-y", "@modelcontextprotocol/server-github"]
+  #   env:
+  #     GITHUB_PERSONAL_ACCESS_TOKEN: "your-token-here"
+
+# Conversation Settings
+conversation:
+  # Maximum messages to keep in history
+  max_history: 10
+  
+  # SQLite database path for conversation persistence
+  db_path: "data/conversations.db"
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/chatbot.log"

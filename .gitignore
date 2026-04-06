@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# Environment
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Data & Index (local artifacts)
+data/index/
+data/analytics/
+data/documents/
+
+# Personal/Private
+src/llm/prompts_RATUL.py
+
+# Misc
+*.bak
+*.tmp
