@@ -1,10 +1,12 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import MessageList from './MessageList'
 import MessageInput from './MessageInput'
+import SearchHistoryPanel from './SearchHistoryPanel'
 import GenieLogo from './GenieLogo'
 import { ChatWebSocket } from '../api/websocket'
 import { Sparkles, BookOpen, Search } from 'lucide-react'
 import { useTheme } from '../contexts/ThemeContext'
+import { useSearchHistory } from '../hooks/useSearchHistory'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -23,7 +25,23 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
   const [processingStatus, setProcessingStatus] = useState<string>('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<ChatWebSocket | null>(null)
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false)
+  const [pendingHistoryQuery, setPendingHistoryQuery] = useState<string | null>(null)
   const { theme } = useTheme()
+  const {
+    history: searchHistory,
+    addToHistory,
+    removeFromHistory,
+    clearHistory: clearSearchHistory,
+  } = useSearchHistory()
+
+  const handleToggleHistory = useCallback(() => {
+    setIsHistoryOpen(prev => !prev)
+  }, [])
+
+  const handleHistorySelect = useCallback((query: string) => {
+    setPendingHistoryQuery(query)
+  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -127,6 +145,9 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
       return
     }
 
+    // Save to search history
+    addToHistory(content)
+
     // Add user message
     const userMessage: Message = {
       role: 'user',
@@ -155,7 +176,9 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex overflow-hidden">
+      {/* Chat Column */}
+      <div className="flex-1 flex flex-col overflow-hidden">
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-4 py-6">
         {messages.length === 0 ? (
@@ -240,7 +263,24 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
         isLoading={isLoading}
         disabled={isLoading}
         processingStatus={processingStatus}
+        isHistoryOpen={isHistoryOpen}
+        onToggleHistory={handleToggleHistory}
+        hasHistory={searchHistory.length > 0}
+        pendingQuery={pendingHistoryQuery}
+        onPendingQueryConsumed={() => setPendingHistoryQuery(null)}
       />
+      </div>
+
+      {/* Search History Pane */}
+      {isHistoryOpen && (
+        <SearchHistoryPanel
+          history={searchHistory}
+          onSelect={handleHistorySelect}
+          onRemove={removeFromHistory}
+          onClear={clearSearchHistory}
+          onClose={() => setIsHistoryOpen(false)}
+        />
+      )}
     </div>
   )
 }

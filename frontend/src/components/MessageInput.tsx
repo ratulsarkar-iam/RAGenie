@@ -1,5 +1,5 @@
-import { useState, KeyboardEvent } from 'react'
-import { Send, Trash2, Loader2, Brain } from 'lucide-react'
+import { useState, useEffect, KeyboardEvent } from 'react'
+import { Send, Trash2, Loader2, Brain, History } from 'lucide-react'
 import { useTheme } from '../contexts/ThemeContext'
 
 interface MessageInputProps {
@@ -8,6 +8,11 @@ interface MessageInputProps {
   isLoading: boolean
   disabled: boolean
   processingStatus?: string
+  isHistoryOpen?: boolean
+  onToggleHistory?: () => void
+  hasHistory?: boolean
+  pendingQuery?: string | null
+  onPendingQueryConsumed?: () => void
 }
 
 export default function MessageInput({ 
@@ -15,12 +20,25 @@ export default function MessageInput({
   onClearHistory, 
   isLoading, 
   disabled,
-  processingStatus = ''
+  processingStatus = '',
+  isHistoryOpen = false,
+  onToggleHistory,
+  hasHistory = false,
+  pendingQuery = null,
+  onPendingQueryConsumed
 }: MessageInputProps) {
   const [input, setInput] = useState('')
   const [useReasoning, setUseReasoning] = useState(false)
   const [autoDetectReasoning, setAutoDetectReasoning] = useState(true)
   const { theme } = useTheme()
+
+  // Fill input when a history item is selected from the panel
+  useEffect(() => {
+    if (pendingQuery) {
+      setInput(pendingQuery)
+      onPendingQueryConsumed?.()
+    }
+  }, [pendingQuery, onPendingQueryConsumed])
 
   const handleSubmit = () => {
     if (input.trim() && !disabled) {
@@ -64,10 +82,28 @@ export default function MessageInput({
                 ? 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-white'
                 : 'bg-gray-100 border-gray-200 hover:bg-gray-200 text-slate-700'
             }`}
-            title="Clear history"
+            title="Clear chat"
           >
             <Trash2 className="w-5 h-5" />
           </button>
+          
+          {onToggleHistory && hasHistory && (
+            <button
+              onClick={onToggleHistory}
+              className={`p-3 rounded-xl backdrop-blur-xl border transition-all shadow-lg ${
+                isHistoryOpen
+                  ? theme === 'dark'
+                    ? 'bg-blue-600 border-blue-500 text-white'
+                    : 'bg-blue-500 border-blue-400 text-white'
+                  : theme === 'dark'
+                    ? 'bg-slate-800 border-slate-700 hover:bg-slate-700 text-white'
+                    : 'bg-gray-100 border-gray-200 hover:bg-gray-200 text-slate-700'
+              }`}
+              title={isHistoryOpen ? 'Hide search history' : 'Show search history'}
+            >
+              <History className="w-5 h-5" />
+            </button>
+          )}
           
           <button
             onClick={() => setAutoDetectReasoning(!autoDetectReasoning)}
