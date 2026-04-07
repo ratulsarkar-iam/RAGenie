@@ -137,7 +137,7 @@ RAGenie is a self-hosted AI assistant that combines four core capabilities — *
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/RAGenie.git
+git clone https://github.com/ratulsarkar-iam/RAGenie.git
 cd RAGenie
 
 # 2. Create virtual environment
