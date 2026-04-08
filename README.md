@@ -13,10 +13,12 @@ An open-source AI assistant powered by **Retrieval-Augmented Generation (RAG)** 
 ## Features
 
 - **Local LLMs via Ollama** — Run models like Gemma 4, Qwen 2.5, DeepSeek-R1, Llama 3.2 entirely on your machine. No API keys, no cloud dependency.
-- **RAG System** — Ingest documents (PDF, TXT, Markdown), chunk and index them with BM25, and retrieve relevant context for every query.
+- **RAG System** — Ingest documents (PDF, TXT, Markdown, DOCX, Excel, images, audio), chunk and index them with BM25, and retrieve relevant context for every query.
 - **Multi-Model Architecture** — Assign different models to different roles: a reasoning model for chain-of-thought analysis, a main model for responses, and a fallback for reliability.
 - **Internet Search** — DuckDuckGo integration for real-time web information, with result caching.
 - **Data Analytics** — Upload CSV/Excel/JSON data, run statistical analysis, build regression/classification models, and generate interactive Plotly visualizations.
+- **Chat File Upload** — Attach files directly in the chat (drag-and-drop or click), upload up to 30MB, and query their contents — just like ChatGPT or Gemini.
+- **Search History** — Persistent search history with a dedicated side pane for filtering, selecting, and reusing past queries (localStorage-backed).
 - **Modern Web UI** — React + TypeScript + Tailwind CSS frontend with dark/light theme toggle, glassmorphism design, WebSocket streaming, and document management.
 - **MCP Support** — Model Context Protocol server/client for integration with tools like Claude Desktop.
 - **Fully Configurable** — Single YAML file controls LLM settings, RAG parameters, search behavior, server config, and more.
@@ -51,7 +53,8 @@ RAGenie is a self-hosted AI assistant that combines four core capabilities — *
 │         │                                     │          │
 │  ┌──────▼───────────────────┐  ┌──────────────▼───────┐  │
 │  │  RAG System (BM25)       │  │  Document Loaders    │  │
-│  │  + Context Builder       │  │  (PDF/TXT/Markdown)  │  │
+│  │  + Context Builder       │  │  (PDF/DOCX/Excel/    │  │
+│  │                          │  │   Image/Audio/TXT)   │  │
 │  └──────────────────────────┘  └──────────────────────┘  │
 │         │                                                │
 │  ┌──────▼───────────────────┐                            │
@@ -98,7 +101,13 @@ RAGenie is a self-hosted AI assistant that combines four core capabilities — *
 ### Document Ingestion Pipeline
 
 1. Files are uploaded via the UI or CLI and saved to `data/documents/`.
-2. **Document Loaders** (`loaders.py`) extract text — using `pdfplumber` for PDFs (with `PyPDF2` fallback), direct read for TXT, and Markdown-aware parsing for `.md` files.
+2. **Document Loaders** (`loaders.py`) extract text:
+   - **PDF**: `pdfplumber` (with `PyPDF2` fallback)
+   - **DOCX/DOC**: `python-docx` (paragraphs + tables)
+   - **Excel/CSV**: `pandas` (all sheets, column metadata)
+   - **Images**: `Pillow` for metadata + optional `pytesseract` OCR
+   - **Audio**: `mutagen` for metadata + optional `SpeechRecognition` transcription
+   - **TXT/Markdown**: direct read with normalization
 3. The **Chunker** (`chunker.py`) splits text into overlapping chunks (default: 1000 chars, 200 overlap) to preserve context at boundaries.
 4. Each chunk gets a unique ID derived from its content hash (SHA-256) for deduplication.
 5. Chunks are added to the **BM25 index** (`page_index_store.py`) and persisted to `data/index/page_index.json`.
@@ -326,9 +335,18 @@ Comment out or remove the `multi_model` section to use single-model mode with `m
 
 ### Supported Formats
 
-- **PDF** (.pdf)
-- **Plain Text** (.txt)
-- **Markdown** (.md, .markdown)
+| Category | Extensions |
+|---|---|
+| **Documents** | `.pdf`, `.txt`, `.md`, `.markdown`, `.docx`, `.doc` |
+| **Spreadsheets** | `.xlsx`, `.xls`, `.csv` |
+| **Images** | `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.webp`, `.tiff`, `.svg` |
+| **Audio** | `.mp3`, `.wav`, `.ogg`, `.flac`, `.m4a`, `.aac`, `.wma` |
+
+> **File size limit**: 30MB per file.
+>
+> **Image OCR**: Install `pytesseract` for automatic text extraction from images.
+>
+> **Audio transcription**: Install `SpeechRecognition` for WAV transcription via Google Speech API.
 
 ### Ingest Documents
 
@@ -341,10 +359,17 @@ python scripts/ingest_documents.py path/to/document.pdf
 python scripts/ingest_documents.py -r data/documents/
 ```
 
-**Via Web UI:**
+**Via Web UI (sidebar):**
 1. Open the sidebar
 2. Click "Upload Document"
 3. Select a file — it's automatically chunked and indexed
+
+**Via Chat (inline upload):**
+1. Click the 📎 attach button in the chat input, or drag-and-drop files onto the input area
+2. Add an optional message (e.g., "Summarize this document")
+3. Press Send — files are uploaded, ingested into the RAG index, and the LLM responds with context from the file
+
+This works like ChatGPT or Gemini: upload a file and immediately ask questions about it.
 
 ### How It Works
 
@@ -404,8 +429,9 @@ CSV, Excel (.xlsx/.xls), JSON, TSV, TXT, PDF (table extraction)
 | `GET` | `/history/{id}` | Get conversation history |
 | `DELETE` | `/history/{id}` | Clear conversation |
 | `GET` | `/documents` | List indexed documents |
-| `POST` | `/api/upload` | Upload a document |
-| `DELETE` | `/api/documents/{id}` | Delete a document |
+| `POST` | `/upload` | Upload and ingest a document |
+| `POST` | `/chat-upload` | Upload a file in chat context (ingest + return preview) |
+| `DELETE` | `/documents/{id}` | Delete a document |
 
 ### Analytics Endpoints
 
@@ -452,8 +478,12 @@ curl -X POST http://localhost:8000/chat \
 curl http://localhost:8000/documents
 
 # Upload a document
-curl -X POST http://localhost:8000/api/upload \
+curl -X POST http://localhost:8000/upload \
   -F "file=@document.pdf"
+
+# Upload a file for chat querying
+curl -X POST http://localhost:8000/chat-upload \
+  -F "file=@report.docx"
 
 # Upload analytics data
 curl -X POST http://localhost:8000/analytics/upload \
@@ -499,10 +529,12 @@ The frontend is built with **React 18 + TypeScript + Vite + Tailwind CSS**.
 ### Features
 
 - Real-time chat with WebSocket streaming
+- **In-chat file upload** — attach files via 📎 button or drag-and-drop, with file preview chips
+- **Search history pane** — side panel with filtering, query reuse, and clear controls (localStorage-persisted)
 - Markdown rendering for AI responses
 - Document management (upload, list, delete) in the sidebar
 - Dark/light theme toggle (saved to localStorage)
-- macOS-inspired glassmorphism design
+- macOS-inspired glassmorphism design with modern ChatGPT-style input box
 - Interactive Plotly charts for analytics
 - Responsive layout
 
@@ -520,7 +552,7 @@ npm run lint     # Run ESLint
 - `react`, `react-dom` — UI framework
 - `react-markdown` — Markdown rendering
 - `plotly.js`, `react-plotly.js` — Interactive charts
-- `lucide-react` — Icons
+- `lucide-react` — Icons (including Paperclip, FileText, Image, Music, FileSpreadsheet)
 - `axios` — HTTP client
 - `tailwindcss` — Styling
 
@@ -556,7 +588,7 @@ RAGenie/
 │   │   ├── exceptions.py        # Custom exceptions
 │   │   └── logging_config.py    # Logging setup
 │   ├── ingestion/
-│   │   ├── loaders.py           # PDF/TXT/MD document loaders
+│   │   ├── loaders.py           # Document loaders (PDF/DOCX/Excel/Image/Audio/TXT/MD)
 │   │   └── pipeline.py          # Ingestion pipeline
 │   ├── llm/
 │   │   ├── langchain_wrapper.py # LangChain LLM integration
@@ -576,8 +608,13 @@ RAGenie/
 │   ├── src/
 │   │   ├── api/                 # API client (chat, analytics)
 │   │   ├── components/          # React components
+│   │   │   ├── ChatInterface.tsx    # Main chat with file upload integration
+│   │   │   ├── MessageInput.tsx     # Input box with attach, drag-drop, toolbar
+│   │   │   ├── MessageList.tsx      # Messages with file attachment badges
+│   │   │   └── SearchHistoryPanel.tsx # Search history side pane
 │   │   ├── contexts/            # Theme context
-│   │   ├── hooks/               # WebSocket hook
+│   │   ├── hooks/
+│   │   │   └── useSearchHistory.ts   # localStorage search history hook
 │   │   ├── App.tsx              # Root component
 │   │   └── main.tsx             # Entry point
 │   ├── package.json
@@ -676,3 +713,7 @@ You are free to use, modify, and distribute this software for any purpose, inclu
 - [DuckDuckGo](https://duckduckgo.com) — Search API
 - [Plotly](https://plotly.com) — Interactive charting
 - [scikit-learn](https://scikit-learn.org) — Machine learning
+- [python-docx](https://python-docx.readthedocs.io) — DOCX file processing
+- [Pillow](https://pillow.readthedocs.io) — Image processing & metadata
+- [mutagen](https://mutagen.readthedocs.io) — Audio metadata extraction
+- [pandas](https://pandas.pydata.org) — Excel/CSV data loading

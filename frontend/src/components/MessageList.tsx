@@ -1,13 +1,28 @@
 import ReactMarkdown from 'react-markdown'
-import { User, Brain } from 'lucide-react'
+import { User, Brain, FileText, Image, Music, FileSpreadsheet } from 'lucide-react'
 import GenieLogo from './GenieLogo'
 import { useTheme } from '../contexts/ThemeContext'
+import type { FileAttachment } from './ChatInterface'
+
+function getAttachmentIcon(fileType: string) {
+  if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'svg'].includes(fileType)) return Image
+  if (['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma'].includes(fileType)) return Music
+  if (['xlsx', 'xls', 'csv'].includes(fileType)) return FileSpreadsheet
+  return FileText
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: string
   useReasoning?: boolean
+  attachments?: FileAttachment[]
 }
 
 interface MessageListProps {
@@ -50,6 +65,23 @@ export default function MessageList({ messages, streamingContent = '' }: Message
           >
             {message.role === 'user' ? (
               <div>
+                {message.attachments && message.attachments.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {message.attachments.map((att, i) => {
+                      const Icon = getAttachmentIcon(att.file_type)
+                      return (
+                        <span
+                          key={att.filename + i}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs bg-white/20 backdrop-blur-sm"
+                        >
+                          <Icon className="w-3 h-3" />
+                          <span className="truncate max-w-[120px]">{att.filename}</span>
+                          <span className="opacity-70">({formatFileSize(att.file_size)})</span>
+                        </span>
+                      )
+                    })}
+                  </div>
+                )}
                 <p className="whitespace-pre-wrap">{message.content}</p>
                 {message.useReasoning && (
                   <div className="flex items-center gap-1 mt-2 text-xs opacity-80">

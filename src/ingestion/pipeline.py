@@ -63,7 +63,13 @@ class IngestionPipeline:
             raise DocumentIngestionError(f"Not a directory: {directory_path}")
         
         # Find all supported files
-        supported_extensions = {'.txt', '.pdf', '.md', '.markdown'}
+        supported_extensions = {
+            '.txt', '.pdf', '.md', '.markdown',
+            '.docx', '.doc',
+            '.xlsx', '.xls', '.csv',
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.svg',
+            '.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.wma',
+        }
         
         if recursive:
             files = [f for f in path.rglob('*') if f.suffix.lower() in supported_extensions]

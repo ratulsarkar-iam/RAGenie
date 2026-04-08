@@ -4,14 +4,23 @@ import MessageInput from './MessageInput'
 import SearchHistoryPanel from './SearchHistoryPanel'
 import GenieLogo from './GenieLogo'
 import { ChatWebSocket } from '../api/websocket'
+import { chatUploadFile, ChatUploadResponse } from '../api/chat'
 import { Sparkles, BookOpen, Search } from 'lucide-react'
 import { useTheme } from '../contexts/ThemeContext'
 import { useSearchHistory } from '../hooks/useSearchHistory'
+
+export interface FileAttachment {
+  filename: string
+  file_type: string
+  file_size: number
+  doc_id?: string
+}
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: string
+  attachments?: FileAttachment[]
 }
 
 interface ChatInterfaceProps {
@@ -139,26 +148,68 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     }
   }, [])
 
-  const handleSendMessage = async (content: string, useReasoning: boolean = false) => {
+  const handleSendMessage = async (content: string, useReasoning: boolean = false, files?: File[]) => {
     if (!wsRef.current || !wsRef.current.isConnected()) {
       console.error('WebSocket not connected')
       return
     }
 
     // Save to search history
-    addToHistory(content)
+    if (content.trim()) addToHistory(content)
 
-    // Add user message
+    let attachments: FileAttachment[] = []
+    let fileContext = ''
+
+    // Upload files first if any
+    if (files && files.length > 0) {
+      setIsLoading(true)
+      setProcessingStatus('Uploading files...')
+
+      for (const file of files) {
+        try {
+          const result: ChatUploadResponse = await chatUploadFile(file)
+          attachments.push({
+            filename: result.filename,
+            file_type: result.file_type,
+            file_size: result.file_size,
+            doc_id: result.doc_id,
+          })
+          fileContext += `\n[Uploaded file: ${result.filename} (${result.file_type}, ${result.num_chunks} chunks)]`
+        } catch (err: any) {
+          const errMsg = err?.response?.data?.detail || err.message || 'Upload failed'
+          const errorMessage: Message = {
+            role: 'assistant',
+            content: `Failed to upload ${file.name}: ${errMsg}`,
+            timestamp: new Date().toISOString()
+          }
+          setMessages(prev => [...prev, errorMessage])
+        }
+      }
+      setProcessingStatus('')
+    }
+
+    // Build the message to send
+    const messageToSend = content.trim()
+      ? (fileContext ? `${content.trim()}\n${fileContext}` : content.trim())
+      : (fileContext ? `Please analyze the uploaded file(s).${fileContext}` : '')
+
+    if (!messageToSend) {
+      setIsLoading(false)
+      return
+    }
+
+    // Add user message to chat (show original text, not the file context suffix)
     const userMessage: Message = {
       role: 'user',
-      content,
-      timestamp: new Date().toISOString()
+      content: content.trim() || 'Analyze the uploaded file(s)',
+      timestamp: new Date().toISOString(),
+      attachments: attachments.length > 0 ? attachments : undefined,
     }
     setMessages(prev => [...prev, userMessage])
 
     try {
       // Send via WebSocket with reasoning flag
-      wsRef.current.sendMessage(content, conversationId, false, useReasoning)
+      wsRef.current.sendMessage(messageToSend, conversationId, false, useReasoning)
     } catch (error) {
       console.error('Error sending message:', error)
       const errorMessage: Message = {

@@ -86,3 +86,26 @@ export const summarizeDocument = async (docId: string): Promise<any> => {
   const response = await api.get(`/documents/${docId}/summarize`)
   return response.data
 }
+
+export interface ChatUploadResponse {
+  status: string
+  doc_id: string
+  filename: string
+  file_type: string
+  file_size: number
+  num_chunks: number
+  preview: string
+}
+
+export const chatUploadFile = async (file: File): Promise<ChatUploadResponse> => {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const response = await api.post<ChatUploadResponse>('/chat-upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+    timeout: 120000, // 2 min timeout for large files
+  })
+  return response.data
+}

@@ -29,6 +29,10 @@ duckduckgo-search==4.1.1
 pypdf2==3.0.1
 pdfplumber==0.10.3
 python-markdown==0.1.0
+python-docx>=1.1.0
+Pillow>=10.0.0
+mutagen>=1.47.0
+SpeechRecognition>=3.10.0
 
 # Analytics and Data Processing
 pandas>=2.0.0

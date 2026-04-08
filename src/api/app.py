@@ -353,10 +353,26 @@ async def upload_document(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="No filename provided")
     
     ext = os.path.splitext(filename)[1].lower()
-    if ext not in ['.txt', '.pdf', '.md', '.markdown']:
+    ALLOWED_EXTENSIONS = [
+        '.txt', '.pdf', '.md', '.markdown',
+        '.docx', '.doc',
+        '.xlsx', '.xls', '.csv',
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.svg',
+        '.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.wma',
+    ]
+    if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400, 
-            detail=f"Unsupported file type: {ext}. Supported: .txt, .pdf, .md"
+            detail=f"Unsupported file type: {ext}. Supported: {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+    
+    # Check file size (30MB max)
+    content = await file.read()
+    MAX_SIZE = 30 * 1024 * 1024  # 30MB
+    if len(content) > MAX_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Maximum size is 30MB, got {len(content) / (1024*1024):.1f}MB"
         )
     
     # Ensure data/documents directory exists
@@ -376,7 +392,6 @@ async def upload_document(file: UploadFile = File(...)):
     
     try:
         # Save uploaded file to data/documents
-        content = await file.read()
         with open(dest_path, 'wb') as f:
             f.write(content)
         
@@ -405,6 +420,88 @@ async def upload_document(file: UploadFile = File(...)):
                 logger.info(f"Cleaned up file after failed ingestion: {dest_path}")
             except Exception as cleanup_error:
                 logger.warning(f"Could not clean up file: {cleanup_error}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat-upload")
+async def chat_upload(file: UploadFile = File(...), message: str = ""):
+    """Upload a file in chat context. Ingests the file and returns its doc_id and extracted content summary
+    so the frontend can send a follow-up chat message referencing the file."""
+    ingestion_pipeline = app_state.get("ingestion_pipeline")
+    rag_store = app_state.get("rag_store")
+    orchestrator = app_state.get("orchestrator")
+    
+    if ingestion_pipeline is None or rag_store is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    
+    filename = file.filename
+    if not filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+    
+    ext = os.path.splitext(filename)[1].lower()
+    ALLOWED_EXTENSIONS = [
+        '.txt', '.pdf', '.md', '.markdown',
+        '.docx', '.doc',
+        '.xlsx', '.xls', '.csv',
+        '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.svg',
+        '.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac', '.wma',
+    ]
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ext}"
+        )
+    
+    # Read and check size
+    content_bytes = await file.read()
+    MAX_SIZE = 30 * 1024 * 1024
+    if len(content_bytes) > MAX_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Maximum size is 30MB, got {len(content_bytes) / (1024*1024):.1f}MB"
+        )
+    
+    # Save to data/documents
+    documents_dir = Path("data/documents")
+    documents_dir.mkdir(parents=True, exist_ok=True)
+    dest_path = documents_dir / filename
+    counter = 1
+    base_name = os.path.splitext(filename)[0]
+    while dest_path.exists():
+        new_filename = f"{base_name}_{counter}{ext}"
+        dest_path = documents_dir / new_filename
+        counter += 1
+    
+    try:
+        with open(dest_path, 'wb') as f:
+            f.write(content_bytes)
+        
+        logger.info(f"Chat-upload saved file to: {dest_path}")
+        
+        # Ingest the file
+        doc = ingestion_pipeline.ingest_file(str(dest_path))
+        rag_store.save()
+        
+        # Build a content preview (first 500 chars)
+        preview = doc.content[:500] + ("..." if len(doc.content) > 500 else "")
+        
+        return {
+            "status": "success",
+            "doc_id": doc.doc_id,
+            "filename": doc.filename,
+            "file_type": doc.file_type,
+            "file_size": doc.file_size,
+            "num_chunks": len(doc.chunks),
+            "preview": preview
+        }
+    
+    except Exception as e:
+        logger.error(f"Chat-upload error: {str(e)}")
+        if dest_path.exists():
+            try:
+                dest_path.unlink()
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=str(e))
 
 
