@@ -1,7 +1,11 @@
 export interface WebSocketMessage {
-  type: 'user_message' | 'assistant_message' | 'stream_start' | 'stream_token' | 'stream_end' | 'error' | 'reasoning'
+  type: 'user_message' | 'assistant_message' | 'stream_start' | 'stream_token' | 'stream_end' | 'error' | 'reasoning' | 'tool_call' | 'tool_result' | 'tool_error'
   content?: string
   done?: boolean
+  tool?: string
+  args?: string
+  result?: string
+  error?: string
 }
 
 export class ChatWebSocket {

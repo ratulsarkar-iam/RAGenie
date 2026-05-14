@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, KeyboardEvent, DragEvent, ChangeEvent } from 'react'
-import { Send, Trash2, Loader2, Brain, History, Paperclip, X, FileText, Image, Music, FileSpreadsheet } from 'lucide-react'
+import { Send, Trash2, Loader2, Brain, History, Paperclip, X, FileText, Image, Music, FileSpreadsheet, Bot } from 'lucide-react'
 import { useTheme } from '../contexts/ThemeContext'
 
 const MAX_FILE_SIZE = 30 * 1024 * 1024 // 30MB
@@ -27,7 +27,7 @@ function formatSize(bytes: number) {
 }
 
 interface MessageInputProps {
-  onSendMessage: (message: string, useReasoning?: boolean, files?: File[]) => void
+  onSendMessage: (message: string, useReasoning?: boolean, files?: File[], useAgent?: boolean) => void
   onClearHistory: () => void
   isLoading: boolean
   disabled: boolean
@@ -54,6 +54,7 @@ export default function MessageInput({
   const [input, setInput] = useState('')
   const [useReasoning, setUseReasoning] = useState(false)
   const [autoDetectReasoning, setAutoDetectReasoning] = useState(true)
+  const [useAgent, setUseAgent] = useState(false)
   const [attachedFiles, setAttachedFiles] = useState<File[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
   const [fileError, setFileError] = useState('')
@@ -83,7 +84,7 @@ export default function MessageInput({
       shouldUseReasoning = reasoningKeywords.some(keyword => lowerInput.includes(keyword))
     }
     
-    onSendMessage(input.trim(), shouldUseReasoning, attachedFiles.length > 0 ? attachedFiles : undefined)
+    onSendMessage(input.trim(), shouldUseReasoning, attachedFiles.length > 0 ? attachedFiles : undefined, useAgent)
     setInput('')
     setAttachedFiles([])
     setFileError('')
@@ -327,6 +328,28 @@ export default function MessageInput({
                 <Brain className="w-[18px] h-[18px]" />
               </button>
             )}
+
+            <div className={`w-px h-5 mx-1 ${
+              theme === 'dark' ? 'bg-slate-700' : 'bg-gray-200'
+            }`} />
+
+            <button
+              onClick={() => setUseAgent(!useAgent)}
+              disabled={disabled}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${
+                useAgent
+                  ? theme === 'dark'
+                    ? 'text-emerald-300 bg-emerald-500/15 border border-emerald-500/30'
+                    : 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                  : theme === 'dark'
+                    ? 'text-slate-400 hover:text-white hover:bg-slate-700'
+                    : 'text-slate-500 hover:text-slate-700 hover:bg-gray-100'
+              }`}
+              title={useAgent ? 'Agent mode ON — MCP tools active' : 'Enable agent mode to use MCP tools'}
+            >
+              <Bot className="w-[15px] h-[15px]" />
+              Agent
+            </button>
           </div>
 
           {/* Right side — processing status + send */}

@@ -151,3 +151,92 @@ logging:
   level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
   file: "logs/chatbot.log"
+
+# Persistent Memory System
+memory:
+  enabled: true
+  store_path: "data/memory/memories.db"
+  max_context_items: 8
+  context_window: 2000
+
+# Task Execution Framework
+tasks:
+  enabled: true  # Set to true after configuring MCP clients below
+  require_confirmation: true
+  task_clients:
+    - name: "calendar"
+      enabled: false
+      command: "python"
+      args: ["mcp_clients/mcp_calendar_macos.py"]
+    - name: "reminders"
+      enabled: false
+      command: "python"
+      args: ["mcp_clients/mcp_reminders_macos.py"]
+
+# Learning Feedback Loop
+learning:
+  enabled: true
+  adaptation_rate: 0.1
+  positive_increment: 0.1
+  negative_decrement: 0.08
+
+# Proactive Capabilities
+proactive:
+  enabled: true  # Set to true to enable daily briefings and nudges
+  briefing_hour: 9
+  cycle_interval_minutes: 30
+  quiet_hours_start: 22
+  quiet_hours_end: 8
+
+# Security Hardening
+security:
+  security_headers: true
+  log_redaction: true
+  max_request_size_mb: 30
+  ws_max_message_length: 10000
+  audit_log_path: "logs/audit.log"
+  rate_limiting:
+    enabled: true
+    default_rpm: 60       # requests per minute per IP (general endpoints)
+    upload_rph: 10        # uploads per hour per IP
+    ws_rpm: 30            # WebSocket messages per minute per client
+
+# Authentication (disabled by default — enable when ready to protect endpoints)
+# Set RAGENIE_SECRET_KEY env var before enabling in production!
+auth:
+  enabled: true
+  db_path: "data/auth/users.db"
+  access_token_expire_minutes: 30
+  refresh_token_expire_days: 7
+
+# News Aggregator & Summariser (uses DuckDuckGo News — no API key required)
+news:
+  enabled: true
+  db_path: "data/news/news.db"
+  region: "wt-wt"              # worldwide / any language (default — recommended)
+                               # Keywords in any script (Devanagari, Tamil, etc.) work
+                               # automatically with wt-wt; change region to bias results:
+                               #
+                               # Indian languages:
+                               #   in-en  English (India)    in-hi  Hindi
+                               #   in-bn  Bengali            in-te  Telugu
+                               #   in-mr  Marathi            in-ta  Tamil
+                               #   in-gu  Gujarati           in-kn  Kannada
+                               #   in-ml  Malayalam          in-pa  Punjabi
+                               #   in-or  Odia               in-ur  Urdu
+                               #
+                               # Other: us-en, gb-en, de-de, fr-fr, jp-jp, xa-ar
+  default_fetch_interval_minutes: 60
+  default_max_articles_per_fetch: 10
+  summarise_on_fetch: true
+  ingest_into_rag: false       # Set true to make articles searchable in chat
+  max_content_chars: 8000
+  summary_max_sentences: 5
+  retention_days: 3            # Articles older than this are deleted automatically
+  cleanup_interval_hours: 6    # How often the retention job runs
+
+# MCP Client Configuration
+# Controls the new MCP client module that connects RAGenie to external MCP servers.
+# Server configurations are stored in the SQLite DB (not here) and managed via the Web UI.
+mcp_client:
+  store_path: "data/mcp_client/servers.db"  # SQLite DB for MCP server configs

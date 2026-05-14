@@ -1,4 +1,4 @@
-# Python
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -9,38 +9,93 @@ dist/
 build/
 venv/
 .venv/
+*.pyo
+*.pyd
 
-# Environment
+# ── Environment & Secrets ─────────────────────────────────────────────────────
 .env
 .env.*
+*.secret
+secrets.yaml
+secrets.yml
 
-# Logs
+# ── SQLite / Database files ───────────────────────────────────────────────────
+# Never commit any database — they contain user data, auth tokens, and secrets
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# ── Data directories (all runtime-generated, never commit) ───────────────────
+data/documents/          # uploaded user files
+data/index/              # BM25 RAG index
+data/analytics/          # uploaded analytics datasets
+data/auth/               # user accounts DB
+data/mcp_client/         # MCP server configs (may contain credentials)
+data/memory/             # persistent memory store
+data/news/               # news articles cache
+data/notes/              # proactive notes
+data/conversations.db    # (also matched by *.db above)
+static/analytics/        # generated Plotly chart files
+
+# ── Data files (explicit, per-file) ──────────────────────────────────────────
+data/analytics/datasets.json
+data/analytics/uploads/DSA_Math_Formulas.xlsx
+data/analytics/uploads/New policy maa.pdf
+data/analytics/uploads/Untitled spreadsheet.xlsx
+data/auth/users.db
+data/documents/Manas Sarkar.pdf
+data/index/page_index.json
+data/mcp_client/servers.db
+data/memory/memories.db
+data/news/news.db
+data/notes/Take a note follow up with the design team_20260506_170619.txt
+
+# ── Logs & Audit ──────────────────────────────────────────────────────────────
 logs/
 *.log
 
-# OS
-.DS_Store
-Thumbs.db
+# ── Test / Coverage ───────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.junit.xml
 
-# IDE
+# ── Generated / Build Artifacts ───────────────────────────────────────────────
+*.pptx
+*.pdf.generated
+openspec/changes/archive/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.sublime-workspace
 
-# Node / Frontend
+# ── Node / Frontend ───────────────────────────────────────────────────────────
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
+frontend/coverage/
 
-# Data & Index (local artifacts)
-data/index/
-data/analytics/
-data/documents/
-
-# Personal/Private
+# ── Personal / Private ────────────────────────────────────────────────────────
 src/llm/prompts_RATUL.py
 
-# Misc
+# ── Misc ──────────────────────────────────────────────────────────────────────
 *.bak
 *.tmp
+*.swp
+*.orig

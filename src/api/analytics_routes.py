@@ -60,11 +60,7 @@ def get_page_index_components():
     
     return page_index_store, ingestion_pipeline, config
 
-# Initialize on first use
-try:
-    page_index_store, ingestion_pipeline, config = get_page_index_components()
-except Exception as e:
-    logger.warning(f"Could not initialize page index: {e}. Will retry on first use.")
+# Components are lazily initialized on first route use via get_page_index_components()
 
 # Store only file paths and metadata, not DataFrames
 datasets = {}  # {dataset_id: {'file_path': str, 'filename': str, 'info': dict, 'in_page_index': bool}}

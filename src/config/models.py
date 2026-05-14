@@ -38,6 +38,8 @@ class RAGConfig(BaseModel):
     index_path: str = Field(default="data/index/page_index.json")
     auto_web_search: bool = Field(default=True)
     web_search_threshold: float = Field(default=0.3)  # Relevance threshold
+    semantic_search_enabled: bool = Field(default=False)
+    vector_store_config: Optional[dict] = Field(default=None)
     
     @validator("chunk_overlap")
     def validate_overlap(cls, v, values):
@@ -104,6 +106,75 @@ class LoggingConfig(BaseModel):
     file: str = Field(default="logs/chatbot.log")
 
 
+class MemoryConfig(BaseModel):
+    enabled: bool = Field(default=True)
+    store_path: str = Field(default="data/memory/memories.db")
+    max_context_items: int = Field(default=8)
+    context_window: int = Field(default=2000)
+
+
+class TasksConfig(BaseModel):
+    enabled: bool = Field(default=False)
+    require_confirmation: bool = Field(default=True)
+    task_clients: List[dict] = Field(default_factory=list)
+
+
+class LearningConfig(BaseModel):
+    enabled: bool = Field(default=True)
+    adaptation_rate: float = Field(default=0.1)
+    positive_increment: float = Field(default=0.1)
+    negative_decrement: float = Field(default=0.08)
+
+
+class ProactiveConfig(BaseModel):
+    enabled: bool = Field(default=False)
+    briefing_hour: int = Field(default=9)
+    cycle_interval_minutes: int = Field(default=30)
+    quiet_hours_start: int = Field(default=22)
+    quiet_hours_end: int = Field(default=8)
+
+
+class NewsConfig(BaseModel):
+    enabled: bool = Field(default=False)
+    db_path: str = Field(default="data/news/news.db")
+    region: str = Field(default="wt-wt")  # wt-wt = worldwide/any language
+    default_fetch_interval_minutes: int = Field(default=60, ge=5, le=1440)
+    default_max_articles_per_fetch: int = Field(default=10, ge=1, le=100)
+    summarise_on_fetch: bool = Field(default=True)
+    ingest_into_rag: bool = Field(default=False)
+    max_content_chars: int = Field(default=8000, ge=100)
+    summary_max_sentences: int = Field(default=5, ge=1)
+    retention_days: int = Field(default=3, ge=1)
+    cleanup_interval_hours: int = Field(default=6, ge=1)
+
+
+class MCPClientConfig(BaseModel):
+    store_path: str = Field(default="data/mcp_client/servers.db")
+
+
+class AuthConfig(BaseModel):
+    enabled: bool = Field(default=False)
+    db_path: str = Field(default="data/auth/users.db")
+    access_token_expire_minutes: int = Field(default=30, ge=1)
+    refresh_token_expire_days: int = Field(default=7, ge=1)
+
+
+class RateLimitConfig(BaseModel):
+    enabled: bool = Field(default=True)
+    default_rpm: int = Field(default=60, ge=1)
+    upload_rph: int = Field(default=10, ge=1)
+    ws_rpm: int = Field(default=30, ge=1)
+
+
+class SecurityConfig(BaseModel):
+    rate_limiting: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    security_headers: bool = Field(default=True)
+    log_redaction: bool = Field(default=True)
+    max_request_size_mb: int = Field(default=30, ge=1)
+    ws_max_message_length: int = Field(default=10000, ge=1)
+    audit_log_path: str = Field(default="logs/audit.log")
+
+
 class Config(BaseModel):
     mode: Literal["hybrid", "chatbot", "mcp_server"] = Field(default="hybrid")
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -114,6 +185,14 @@ class Config(BaseModel):
     mcp_clients: List[MCPClientServerConfig] = Field(default_factory=list)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    tasks: TasksConfig = Field(default_factory=TasksConfig)
+    learning: LearningConfig = Field(default_factory=LearningConfig)
+    proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
+    news: NewsConfig = Field(default_factory=NewsConfig)
+    mcp_client: MCPClientConfig = Field(default_factory=MCPClientConfig)
 
     @validator("mcp_server")
     def validate_mcp_server_mode(cls, v, values):

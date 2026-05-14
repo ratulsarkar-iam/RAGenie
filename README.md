@@ -8,6 +8,8 @@ An open-source AI assistant powered by **Retrieval-Augmented Generation (RAG)** 
 ![Ollama](https://img.shields.io/badge/Ollama-Local%20LLMs-black?logo=ollama)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
+> 💡 **New to RAGenie?** Read [**DAILY_VALUE.md**](DAILY_VALUE.md) — a plain-English guide to what RAGenie does for you every day and how much time it saves.
+
 ---
 
 ## Features
@@ -20,8 +22,30 @@ An open-source AI assistant powered by **Retrieval-Augmented Generation (RAG)** 
 - **Chat File Upload** — Attach files directly in the chat (drag-and-drop or click), upload up to 30MB, and query their contents — just like ChatGPT or Gemini.
 - **Search History** — Persistent search history with a dedicated side pane for filtering, selecting, and reusing past queries (localStorage-backed).
 - **Modern Web UI** — React + TypeScript + Tailwind CSS frontend with dark/light theme toggle, glassmorphism design, WebSocket streaming, and document management.
-- **MCP Support** — Model Context Protocol server/client for integration with tools like Claude Desktop.
-- **Fully Configurable** — Single YAML file controls LLM settings, RAG parameters, search behavior, server config, and more.
+- **MCP Server & Client** — Expose RAGenie tools via MCP (SSE/stdio) for Claude Desktop integration, *and* connect to any external MCP server to give the LLM access to 100s of third-party tools.
+- **Authentication** — Optional JWT-based login with access tokens (30 min) and refresh tokens (7 days). Enable with a single config flag.
+- **Persistent Memory** — SQLite-backed long-term memory that survives restarts. RAGenie remembers user preferences and injects relevant context into every prompt.
+- **Learning Feedback Loop** — Users rate responses (👍/👎); scores adapt retrieval weights over time, making the assistant progressively smarter.
+- **News Aggregator** — Fetches, scrapes, and LLM-summarises live news via DuckDuckGo. Supports 20+ language regions. Articles can optionally be ingested into the RAG index.
+- **Proactive Capabilities** — Background scheduler sends daily briefings and context-aware nudges at a configurable hour with quiet-hour enforcement.
+- **Task Execution** — MCP-based task clients for macOS Calendar and Reminders (stdio transport). Confirmation-gated for safety.
+- **Security Hardening** — Rate limiting (slowapi), security headers, request-size caps, log redaction, and audit logging.
+- **Fully Configurable** — Single YAML file controls every subsystem, with environment variable overrides for deployment flexibility.
+
+---
+
+## Presentation
+
+A fully-designed PowerPoint overview deck (**22 slides**) is included in the repository:
+
+```bash
+python generate_presentation.py
+# Output: RAGenie_Overview.pptx
+```
+
+The deck covers architecture, all major features, 6 detailed workflow blueprints (Chat Lifecycle, Document Ingestion, Analytics, MCP Tool-Call, Auth, Memory & Learning), API reference, technology stack, system requirements, and a comparison table.
+
+Requires `python-pptx` and `lxml` (`pip install python-pptx lxml`).
 
 ---
 
@@ -32,46 +56,47 @@ RAGenie is a self-hosted AI assistant that combines four core capabilities — *
 ### Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    React Frontend                        │
-│  Chat UI  │  Analytics Dashboard  │  Document Sidebar    │
-└─────┬──────────────┬───────────────────┬────────────────┘
-      │ WebSocket    │ REST              │ REST
-      ▼              ▼                   ▼
-┌─────────────────────────────────────────────────────────┐
-│                  FastAPI Backend                          │
-│                                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │    Chat       │  │  Analytics   │  │   Document    │  │
-│  │ Orchestrator  │  │   Engine     │  │  Management   │  │
-│  └──────┬───────┘  └──────┬───────┘  └───────┬───────┘  │
-│         │                 │                   │          │
-│  ┌──────▼───────┐  ┌──────▼───────┐  ┌───────▼───────┐  │
-│  │ Multi-Model  │  │  Visualizer  │  │  Ingestion    │  │
-│  │   Manager    │  │  (Plotly)    │  │  Pipeline     │  │
-│  └──────┬───────┘  └──────────────┘  └───────┬───────┘  │
-│         │                                     │          │
-│  ┌──────▼───────────────────┐  ┌──────────────▼───────┐  │
-│  │  RAG System (BM25)       │  │  Document Loaders    │  │
-│  │  + Context Builder       │  │  (PDF/DOCX/Excel/    │  │
-│  │                          │  │   Image/Audio/TXT)   │  │
-│  └──────────────────────────┘  └──────────────────────┘  │
-│         │                                                │
-│  ┌──────▼───────────────────┐                            │
-│  │  Search Service          │                            │
-│  │  (DuckDuckGo + Cache)    │                            │
-│  └──────────────────────────┘                            │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        React Frontend                             │
+│  Chat UI │ Analytics │ Documents │ MCP Servers │ News │ Login     │
+└──────┬───────────┬──────────────┬───────────────┬───────────────┘
+       │ WebSocket │ REST         │ REST          │ REST
+       ▼           ▼              ▼               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    FastAPI Backend (JWT Auth · Rate Limiting)      │
+│                                                                   │
+│  ┌─────────────┐  ┌───────────┐  ┌───────────┐  ┌────────────┐  │
+│  │    Chat     │  │ Analytics │  │ Document  │  │  MCP Client│  │
+│  │ Orchestrator│  │  Engine   │  │  Manager  │  │  Manager   │  │
+│  └──────┬──────┘  └─────┬─────┘  └─────┬─────┘  └─────┬──────┘  │
+│         │               │              │               │         │
+│  ┌──────▼──────┐  ┌─────▼─────┐  ┌────▼──────┐  ┌─────▼──────┐  │
+│  │Multi-Model  │  │Visualizer │  │ Ingestion │  │ External   │  │
+│  │  Manager   │  │ (Plotly)  │  │ Pipeline  │  │MCP Servers │  │
+│  └──────┬──────┘  └───────────┘  └─────┬─────┘  └────────────┘  │
+│         │                              │                         │
+│  ┌──────▼──────────────┐  ┌────────────▼───────┐                 │
+│  │  RAG System (BM25)  │  │  Document Loaders  │                 │
+│  │  + Context Builder  │  │  PDF/DOCX/Excel/   │                 │
+│  └──────┬──────────────┘  │  Image/Audio/TXT   │                 │
+│         │                 └────────────────────┘                 │
+│  ┌──────▼──────────────┐  ┌────────────────────┐                 │
+│  │   Search Service    │  │  Persistent Memory │                 │
+│  │ (DuckDuckGo+Cache)  │  │  + Learning Loop   │                 │
+│  └─────────────────────┘  └────────────────────┘                 │
+│  ┌────────────────────┐   ┌────────────────────┐                 │
+│  │  News Aggregator   │   │  Proactive Engine  │                 │
+│  │  (DuckDuckGo News) │   │  (Scheduler/Nudge) │                 │
+│  └────────────────────┘   └────────────────────┘                 │
+└──────────────────────────────────────────────────────────────────┘
       │
       ▼
-┌─────────────────────┐
-│   Ollama (Local)     │
-│  ┌───────────────┐   │
-│  │ Reasoning LLM │   │
-│  │ Main LLM      │   │
-│  │ Fallback LLM  │   │
-│  └───────────────┘   │
-└──────────────────────┘
+┌─────────────────────┐     ┌─────────────────────┐
+│   Ollama (Local)     │     │  External MCP Tools  │
+│  Reasoning LLM      │     │  Calendar · Reminders│
+│  Main LLM           │     │  GitHub · Filesystem │
+│  Fallback LLM       │     │  … any MCP server    │
+└─────────────────────┘     └─────────────────────┘
 ```
 
 ### Request Lifecycle — Chat
@@ -125,6 +150,7 @@ RAGenie is a self-hosted AI assistant that combines four core capabilities — *
 
 ## Table of Contents
 
+- [Daily Value Guide](DAILY_VALUE.md)
 - [How It Works](#how-it-works)
 - [Quick Start](#quick-start)
 - [Installation](#installation)
@@ -132,8 +158,18 @@ RAGenie is a self-hosted AI assistant that combines four core capabilities — *
 - [Multi-Model Setup](#multi-model-setup)
 - [Document Management](#document-management)
 - [Analytics](#analytics)
+- [Authentication](#authentication)
+- [MCP Server](#mcp-server)
+- [MCP Client](#mcp-client)
+- [Persistent Memory](#persistent-memory)
+- [Learning & Feedback](#learning--feedback)
+- [Proactive Capabilities](#proactive-capabilities)
+- [News Aggregator](#news-aggregator)
+- [Security](#security)
+- [Task Execution](#task-execution)
 - [API Reference](#api-reference)
 - [Frontend](#frontend)
+- [Presentation](#presentation)
 - [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
@@ -418,6 +454,344 @@ CSV, Excel (.xlsx/.xls), JSON, TSV, TXT, PDF (table extraction)
 
 ---
 
+## Authentication
+
+RAGenie ships with optional JWT-based authentication. It is **disabled by default** — flip one config flag to protect all endpoints.
+
+### Enable Authentication
+
+```yaml
+auth:
+  enabled: true
+  db_path: "data/auth/users.db"
+  access_token_expire_minutes: 30
+  refresh_token_expire_days: 7
+```
+
+> **Important:** Set the `RAGENIE_SECRET_KEY` environment variable before enabling auth in production.
+
+```bash
+export RAGENIE_SECRET_KEY="your-long-random-secret"
+```
+
+### Auth Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/auth/register` | Create a new user account |
+| `POST` | `/auth/login` | Obtain access + refresh tokens |
+| `POST` | `/auth/refresh` | Exchange refresh token for new access token |
+| `POST` | `/auth/logout` | Invalidate the current session |
+| `GET` | `/auth/me` | Get the current user's profile |
+
+### Token Flow
+
+```
+POST /auth/login  →  { access_token (30 min), refresh_token (7 days) }
+       │
+       ├─ Include in all requests: Authorization: Bearer <access_token>
+       │
+       └─ When expired: POST /auth/refresh  →  new access_token
+```
+
+---
+
+## MCP Server
+
+RAGenie can act as an **MCP server**, exposing its tools to any MCP-compatible client (e.g., Claude Desktop).
+
+### Configuration
+
+```yaml
+mcp_server:
+  enabled: true
+  transport: "sse"    # "sse" for HTTP clients, "stdio" for Claude Desktop
+  name: "rag-search-server"
+  port: 8001
+```
+
+### Operational Modes
+
+```yaml
+mode: "hybrid"     # chatbot UI + MCP server (default)
+# mode: "chatbot"  # UI only
+# mode: "mcp_server"  # headless MCP server only
+```
+
+### Exposed Tools
+
+**Core tools (5)**
+
+| Tool | Description |
+|---|---|
+| `search_documents` | Search ingested documents using BM25 |
+| `search_web` | Perform a DuckDuckGo web search |
+| `list_documents` | List all indexed documents |
+| `ask_ragenie` | Send a message and receive an AI response |
+| `execute_task` | Delegate a task via MCP task clients |
+
+**News tools (7)**
+
+| Tool | Description |
+|---|---|
+| `list_news_keywords` | List all tracked news topics |
+| `create_news_keyword` | Start tracking a new news topic |
+| `update_news_keyword` | Change fetch interval, article cap, or enable/pause |
+| `delete_news_keyword` | Stop tracking a topic |
+| `fetch_news_now` | Trigger an immediate fetch by **keyword term** (e.g. `"IPL"`) |
+| `get_news_articles` | Retrieve articles by **keyword term** — fuzzy match + LLM fallback |
+| `suggest_news_keyword` | LLM-assisted keyword suggestion from a natural-language description |
+
+### Claude Desktop Integration
+
+Set `transport: "stdio"` and add to your Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "ragenie": {
+      "command": "python",
+      "args": ["/path/to/RAGenie/mcp_stdio.py"]
+    }
+  }
+}
+```
+
+---
+
+## MCP Client
+
+RAGenie can also act as an **MCP client**, connecting to any external MCP server and injecting its tools directly into the LLM agent. Manage servers through the **MCP Servers** tab in the Web UI.
+
+### Supported Transports
+
+| Transport | Description |
+|---|---|
+| `stdio` | Launches a subprocess; communicates via stdin/stdout |
+| `sse` | HTTP GET with Server-Sent Events (legacy) |
+| `http` | Streamable HTTP POST (MCP protocol 2025-06-18) |
+
+### How It Works
+
+1. Register a server in the UI (name · transport · URL or command).
+2. RAGenie stores the config in `data/mcp_client/servers.db` and opens a persistent connection.
+3. On connect, it calls `list_tools()` to fetch all tool schemas.
+4. Tools are registered in the LLM agent as `server_name/tool_name`.
+5. When the LLM decides to call a tool, RAGenie proxies the call to the appropriate MCP server and returns the result.
+6. Tools rebuild automatically on connect/disconnect — no restart needed.
+
+### REST Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/mcp-servers` | List registered MCP servers |
+| `POST` | `/mcp-servers` | Register a new MCP server |
+| `GET` | `/mcp-servers/{id}` | Get server details |
+| `PUT` | `/mcp-servers/{id}` | Update server config |
+| `DELETE` | `/mcp-servers/{id}` | Remove a server |
+| `POST` | `/mcp-servers/{id}/connect` | Connect to a server |
+| `POST` | `/mcp-servers/{id}/disconnect` | Disconnect from a server |
+| `GET` | `/mcp-servers/{id}/tools` | List tools from a connected server |
+| `POST` | `/mcp-servers/{id}/call` | Manually invoke a tool |
+| `GET` | `/mcp-servers/status` | Connection status of all servers |
+| `GET` | `/mcp-servers/tools/all` | All tools across all connected servers |
+| `POST` | `/mcp-servers/chat` | Agent chat using all connected MCP tools |
+
+### Example: Add a Filesystem MCP Server
+
+```json
+{
+  "name": "filesystem",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+}
+```
+
+---
+
+## Persistent Memory
+
+RAGenie maintains a **long-term memory** across conversations, stored in SQLite.
+
+### Configuration
+
+```yaml
+memory:
+  enabled: true
+  store_path: "data/memory/memories.db"
+  max_context_items: 8    # max memories injected per prompt
+  context_window: 2000    # characters per memory item
+```
+
+### How It Works
+
+1. At the end of each conversation turn, important context phrases are extracted and stored.
+2. On the next message, the top-8 most relevant memory items are retrieved and injected into the prompt.
+3. Memories survive server restarts — they persist in SQLite.
+4. The proactive engine uses stored memories to personalise daily briefings and nudges.
+
+---
+
+## Learning & Feedback
+
+The feedback loop lets RAGenie improve its retrieval over time based on user ratings.
+
+### Configuration
+
+```yaml
+learning:
+  enabled: true
+  adaptation_rate: 0.1
+  positive_increment: 0.1   # score += 0.10 on 👍
+  negative_decrement: 0.08  # score -= 0.08 on 👎
+```
+
+### Usage
+
+After any AI response, click the 👍 or 👎 button. The backend updates that response's score in the database, which influences future BM25 retrieval ranking.
+
+**API:**
+```bash
+POST /feedback/{message_id}
+Content-Type: application/json
+{ "positive": true }
+```
+
+---
+
+## Proactive Capabilities
+
+RAGenie can proactively send daily briefings and reminders without user prompting.
+
+### Configuration
+
+```yaml
+proactive:
+  enabled: true
+  briefing_hour: 9             # send briefing at 09:00
+  cycle_interval_minutes: 30   # check interval
+  quiet_hours_start: 22        # no nudges after 10 PM
+  quiet_hours_end: 8           # resume nudges after 8 AM
+```
+
+### What It Does
+
+- **Daily Briefing** — At `briefing_hour`, generates a morning summary from recent news + stored memories.
+- **Nudges** — Sends context-aware reminders during working hours based on previously stored user context.
+- **Quiet Hours** — No proactive messages sent between `quiet_hours_start` and `quiet_hours_end`.
+
+---
+
+## News Aggregator
+
+Built-in news fetcher that requires **no API key** — powered by DuckDuckGo News.
+
+### Configuration
+
+```yaml
+news:
+  enabled: true
+  db_path: "data/news/news.db"
+  region: "wt-wt"                       # worldwide (default)
+  default_fetch_interval_minutes: 60
+  default_max_articles_per_fetch: 10
+  summarise_on_fetch: true               # LLM auto-summarises each article
+  ingest_into_rag: false                 # set true to make articles searchable in chat
+  max_content_chars: 8000
+  summary_max_sentences: 5
+  retention_days: 3                      # auto-delete older articles
+  cleanup_interval_hours: 6
+```
+
+### Supported Regions
+
+| Code | Region | Code | Region |
+|---|---|---|---|
+| `wt-wt` | Worldwide (default) | `us-en` | USA English |
+| `in-en` | India English | `in-hi` | India Hindi |
+| `in-bn` | India Bengali | `gb-en` | UK English |
+| `de-de` | Germany | `fr-fr` | France |
+| `jp-jp` | Japan | `xa-ar` | Arabic |
+
+Keywords in any script (Devanagari, Tamil, etc.) work automatically with `wt-wt`.
+
+### News REST Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/keywords` | List all tracked keywords |
+| `POST` | `/api/keywords` | Create / start tracking a keyword |
+| `GET` | `/api/keywords/{id}` | Get keyword details |
+| `PATCH` | `/api/keywords/{id}` | Update keyword (interval, cap, enabled) |
+| `DELETE` | `/api/keywords/{id}` | Delete keyword and stop tracking |
+| `POST` | `/api/keywords/{id}/fetch-now` | Trigger an immediate news fetch |
+| `GET` | `/api/news` | List fetched articles (paginated, filterable by `keyword_id`) |
+| `POST` | `/api/keywords/suggest` | LLM-suggested keyword from natural-language description |
+
+> **Keyword resolution:** MCP tools (`fetch_news_now`, `get_news_articles`) accept a plain-text topic name (e.g. `"IPL"`) and resolve it to the stored UUID automatically using exact match → substring match → LLM fallback.
+
+---
+
+## Security
+
+RAGenie includes production-grade security hardening, all configurable via `config.yaml`.
+
+```yaml
+security:
+  security_headers: true         # CSP, HSTS, X-Frame-Options, Referrer-Policy
+  log_redaction: true            # scrub sensitive data from logs
+  max_request_size_mb: 30        # reject bodies larger than 30 MB
+  ws_max_message_length: 10000   # reject WebSocket messages over 10 000 chars
+  audit_log_path: "logs/audit.log"
+  rate_limiting:
+    enabled: true
+    default_rpm: 60              # requests per minute per IP
+    upload_rph: 10               # uploads per hour per IP
+    ws_rpm: 30                   # WebSocket messages per minute per client
+```
+
+### Security Headers Applied
+
+| Header | Value |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Content-Security-Policy` | Strict default-src |
+| `Strict-Transport-Security` | `max-age=31536000` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+
+### Audit Log
+
+All write operations and auth events are written to `logs/audit.log` with sensitive fields redacted.
+
+---
+
+## Task Execution
+
+RAGenie can execute real-world tasks via MCP-based task clients. Tasks requiring side-effects always prompt for confirmation first.
+
+### Configuration
+
+```yaml
+tasks:
+  enabled: true
+  require_confirmation: true     # always ask before executing
+  task_clients:
+    - name: "calendar"
+      enabled: false
+      command: "python"
+      args: ["mcp_clients/mcp_calendar_macos.py"]
+    - name: "reminders"
+      enabled: false
+      command: "python"
+      args: ["mcp_clients/mcp_reminders_macos.py"]
+```
+
+Set `enabled: true` on a client and `tasks.enabled: true` to activate. Currently ships with macOS Calendar and Reminders clients. Any MCP-compatible tool can be wired in as a task client.
+
+---
+
 ## API Reference
 
 ### REST Endpoints
@@ -522,6 +896,42 @@ print(response)
 
 ---
 
+## Presentation
+
+A fully-designed PowerPoint overview deck (**22 slides**) is generated from source:
+
+```bash
+python generate_presentation.py
+# Output: RAGenie_Overview.pptx
+```
+
+Slide index:
+
+| # | Slide |
+|---|---|
+| 1 | Cover |
+| 2 | What is RAGenie? |
+| 3 | System Architecture |
+| 4 | RAG Document Pipeline |
+| 5 | Multi-Model LLM Architecture |
+| 6 | Core Capabilities |
+| 7 | Data Analytics Module |
+| 8 | MCP Integration |
+| 9 | Security & Authentication |
+| 10 | Persistent Memory & Learning |
+| 11 | News Aggregator |
+| 12 | Technology Stack |
+| 13 | API Reference |
+| 14 | Getting Started |
+| 15 | System Requirements |
+| 16 | Why RAGenie? (comparison table) |
+| 17–22 | Workflow Blueprints (Chat · Documents · Analytics · MCP · Auth · Memory) |
+| 23 | Closing |
+
+Requires: `pip install python-pptx lxml`
+
+---
+
 ## Frontend
 
 The frontend is built with **React 18 + TypeScript + Vite + Tailwind CSS**.
@@ -531,6 +941,9 @@ The frontend is built with **React 18 + TypeScript + Vite + Tailwind CSS**.
 - Real-time chat with WebSocket streaming
 - **In-chat file upload** — attach files via 📎 button or drag-and-drop, with file preview chips
 - **Search history pane** — side panel with filtering, query reuse, and clear controls (localStorage-persisted)
+- **MCP Servers manager** — register, connect/disconnect, and inspect tools for external MCP servers
+- **News Feed page** — browse fetched and summarised articles per feed
+- **Login / Register** — JWT auth UI (shown when `auth.enabled: true`)
 - Markdown rendering for AI responses
 - Document management (upload, list, delete) in the sidebar
 - Dark/light theme toggle (saved to localStorage)
@@ -563,70 +976,113 @@ npm run lint     # Run ESLint
 ```
 RAGenie/
 ├── config/
-│   └── config.yaml              # All application settings
+│   └── config.yaml                  # All application settings (single source of truth)
 ├── data/
-│   ├── documents/               # Uploaded/ingested documents
-│   ├── index/                   # RAG index (page_index.json)
-│   └── conversations.db         # Conversation history (SQLite)
+│   ├── documents/                   # Uploaded/ingested documents
+│   ├── index/                       # BM25 RAG index (page_index.json)
+│   ├── auth/
+│   │   └── users.db                 # User accounts (SQLite)
+│   ├── mcp_client/
+│   │   └── servers.db               # MCP client server configs (SQLite)
+│   ├── memory/
+│   │   └── memories.db              # Persistent memory store (SQLite)
+│   ├── news/
+│   │   └── news.db                  # News articles & feeds (SQLite)
+│   └── conversations.db             # Conversation history (SQLite)
 ├── src/
 │   ├── api/
-│   │   ├── app.py               # FastAPI application & REST routes
-│   │   ├── websocket.py         # WebSocket streaming handler
-│   │   └── analytics_routes.py  # Analytics API endpoints
+│   │   ├── app.py                   # FastAPI application, startup, CORS, routes
+│   │   ├── websocket.py             # WebSocket streaming handler
+│   │   ├── analytics_routes.py      # Analytics API endpoints
+│   │   └── mcp_client_routes.py     # MCP client REST endpoints (11 routes)
 │   ├── analytics/
-│   │   ├── data_loader.py       # Multi-format data parser
-│   │   ├── analytics_engine.py  # Statistical analysis & ML models
-│   │   └── visualizer.py        # Plotly chart generation
+│   │   ├── data_loader.py           # Multi-format data parser (CSV/Excel/JSON/PDF)
+│   │   ├── analytics_engine.py      # Statistical analysis & ML models
+│   │   └── visualizer.py            # Plotly chart generation
+│   ├── auth/
+│   │   ├── dependencies.py          # FastAPI auth dependencies / JWT guards
+│   │   ├── jwt_manager.py           # Token creation & validation
+│   │   └── routes.py                # /auth/* endpoints
 │   ├── chat/
-│   │   └── orchestrator.py      # Chat orchestration & agent logic
+│   │   └── orchestrator.py          # Chat orchestration, agent logic, MCP tool calls
 │   ├── config/
-│   │   ├── models.py            # Pydantic config models
-│   │   └── loader.py            # YAML config loader
+│   │   ├── models.py                # Pydantic config models (all sections)
+│   │   └── loader.py                # YAML + env-var config loader
 │   ├── core/
-│   │   ├── models.py            # Data models (Document, Chunk, etc.)
-│   │   ├── document_store.py    # Storage interface
-│   │   ├── exceptions.py        # Custom exceptions
-│   │   └── logging_config.py    # Logging setup
+│   │   ├── models.py                # Core data models (Document, Chunk, etc.)
+│   │   ├── document_store.py        # Storage interface
+│   │   ├── exceptions.py            # Custom exception hierarchy
+│   │   └── logging_config.py        # Structured logging setup
 │   ├── ingestion/
-│   │   ├── loaders.py           # Document loaders (PDF/DOCX/Excel/Image/Audio/TXT/MD)
-│   │   └── pipeline.py          # Ingestion pipeline
+│   │   ├── loaders.py               # Document loaders (PDF/DOCX/Excel/Image/Audio/TXT)
+│   │   └── pipeline.py              # Ingestion pipeline (upload → chunk → index)
+│   ├── learning/
+│   │   └── feedback.py              # Feedback loop & score adaptation
 │   ├── llm/
-│   │   ├── langchain_wrapper.py # LangChain LLM integration
-│   │   ├── multi_model_manager.py # Multi-model orchestration
-│   │   ├── ollama_wrapper.py    # Ollama provider
-│   │   ├── model_loader.py      # HuggingFace model loader
-│   │   └── prompts.py           # System & RAG prompt templates
+│   │   ├── langchain_wrapper.py     # LangChain LLM integration
+│   │   ├── multi_model_manager.py   # Reasoning / Main / Fallback model routing
+│   │   ├── ollama_wrapper.py        # Ollama provider
+│   │   ├── model_loader.py          # HuggingFace model loader
+│   │   └── prompts.py               # System prompt & RAG prompt templates
+│   ├── mcp/
+│   │   └── server.py                # MCP server (SSE/stdio, exposes RAGenie tools)
+│   ├── mcp_client/
+│   │   ├── client.py                # Per-server MCP client (stdio/SSE/HTTP)
+│   │   ├── manager.py               # MCPClientManager (registry + tool rebuild)
+│   │   ├── models.py                # Pydantic models for server config
+│   │   ├── server_store.py          # SQLite persistence for server configs
+│   │   └── exceptions.py            # MCP client exceptions
+│   ├── memory/
+│   │   └── memory_store.py          # Persistent memory read/write (SQLite)
+│   ├── news/
+│   │   ├── fetcher.py               # DuckDuckGo News fetch + scrape
+│   │   ├── models.py                # News article & feed models
+│   │   ├── routes.py                # /news/* REST endpoints
+│   │   └── scheduler.py             # Background fetch scheduler
+│   ├── proactive/
+│   │   └── engine.py                # Daily briefing + nudge scheduler
 │   ├── rag/
-│   │   ├── page_index_store.py  # BM25 index & search
-│   │   ├── chunker.py           # Document chunking
-│   │   ├── retriever.py         # LangChain retriever adapter
-│   │   └── context_builder.py   # Context augmentation
-│   └── search/
-│       ├── search_service.py    # DuckDuckGo search
-│       └── langchain_tool.py    # LangChain search tool
+│   │   ├── page_index_store.py      # BM25 index & search (+ medical term expansion)
+│   │   ├── chunker.py               # Overlapping text chunker
+│   │   ├── retriever.py             # LangChain retriever adapter
+│   │   └── context_builder.py       # Context block assembly
+│   ├── search/
+│   │   ├── search_service.py        # DuckDuckGo search with 1-hour cache
+│   │   └── langchain_tool.py        # LangChain search tool wrapper
+│   ├── security/
+│   │   └── middleware.py            # Security headers, rate limiting, audit log
+│   └── tasks/
+│       └── task_manager.py          # MCP task client manager (Calendar/Reminders)
 ├── frontend/
 │   ├── src/
-│   │   ├── api/                 # API client (chat, analytics)
-│   │   ├── components/          # React components
-│   │   │   ├── ChatInterface.tsx    # Main chat with file upload integration
-│   │   │   ├── MessageInput.tsx     # Input box with attach, drag-drop, toolbar
-│   │   │   ├── MessageList.tsx      # Messages with file attachment badges
-│   │   │   └── SearchHistoryPanel.tsx # Search history side pane
-│   │   ├── contexts/            # Theme context
+│   │   ├── api/                     # Typed API clients (chat, analytics, mcp, news)
+│   │   ├── components/
+│   │   │   ├── ChatInterface.tsx     # Main chat with file upload integration
+│   │   │   ├── MessageInput.tsx      # Input box with attach, drag-drop, toolbar
+│   │   │   ├── MessageList.tsx       # Messages with attachment badges
+│   │   │   ├── SearchHistoryPanel.tsx# Search history side pane
+│   │   │   ├── MCPServersPage.tsx    # MCP client server manager UI
+│   │   │   ├── NewsPage.tsx          # News feed browser
+│   │   │   └── LoginPage.tsx         # Auth login/register form
+│   │   ├── contexts/                # Theme context
 │   │   ├── hooks/
-│   │   │   └── useSearchHistory.ts   # localStorage search history hook
-│   │   ├── App.tsx              # Root component
-│   │   └── main.tsx             # Entry point
+│   │   │   └── useSearchHistory.ts  # localStorage search history hook
+│   │   ├── App.tsx                  # Root component & routing
+│   │   └── main.tsx                 # Entry point
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── tailwind.config.js
+├── mcp_clients/
+│   ├── mcp_calendar_macos.py        # macOS Calendar MCP task client
+│   └── mcp_reminders_macos.py       # macOS Reminders MCP task client
 ├── scripts/
-│   └── ingest_documents.py      # CLI document ingestion
-├── demo.py                      # Interactive CLI demo
-├── run_server.py                # Backend server entry point
-├── start.sh                     # One-command startup script
-├── requirements.txt             # Python dependencies
-└── LICENSE                      # MIT License
+│   └── ingest_documents.py          # CLI document ingestion
+├── demo.py                          # Interactive CLI demo
+├── mcp_stdio.py                     # Headless MCP stdio server entry point
+├── run_server.py                    # Backend server entry point
+├── start.sh                         # One-command startup (backend + frontend)
+├── requirements.txt                 # Python dependencies
+└── LICENSE                          # MIT License
 ```
 
 ---
@@ -708,12 +1164,17 @@ You are free to use, modify, and distribute this software for any purpose, inclu
 - [Ollama](https://ollama.com) — Local LLM runtime
 - [LangChain](https://langchain.com) — LLM orchestration framework
 - [FastAPI](https://fastapi.tiangolo.com) — Backend web framework
+- [MCP SDK](https://github.com/modelcontextprotocol/python-sdk) — Model Context Protocol (mcp==1.17.0)
 - [React](https://react.dev) + [Vite](https://vitejs.dev) — Frontend framework
 - [Tailwind CSS](https://tailwindcss.com) — Utility-first CSS
-- [DuckDuckGo](https://duckduckgo.com) — Search API
+- [DuckDuckGo](https://duckduckgo.com) — Web search & news API
 - [Plotly](https://plotly.com) — Interactive charting
 - [scikit-learn](https://scikit-learn.org) — Machine learning
+- [python-jose](https://python-jose.readthedocs.io) — JWT token generation & validation
+- [passlib](https://passlib.readthedocs.io) — Bcrypt password hashing
+- [slowapi](https://slowapi.readthedocs.io) — Rate limiting middleware
 - [python-docx](https://python-docx.readthedocs.io) — DOCX file processing
 - [Pillow](https://pillow.readthedocs.io) — Image processing & metadata
 - [mutagen](https://mutagen.readthedocs.io) — Audio metadata extraction
 - [pandas](https://pandas.pydata.org) — Excel/CSV data loading
+- [aiofiles](https://github.com/Tinche/aiofiles) — Async file I/O

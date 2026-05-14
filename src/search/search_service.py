@@ -1,3 +1,5 @@
+import time
+import random
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from duckduckgo_search import DDGS
@@ -73,27 +75,33 @@ class SearchService:
         return results
     
     def _search_duckduckgo(self, query: str, max_results: int) -> List[SearchResult]:
-        """Search using DuckDuckGo."""
-        try:
-            with DDGS() as ddgs:
-                raw_results = list(ddgs.text(query, max_results=max_results))
-            
-            # Convert to SearchResult objects
-            results = []
-            for item in raw_results:
-                result = SearchResult(
-                    title=item.get('title', ''),
-                    url=item.get('href', ''),
-                    snippet=item.get('body', ''),
-                    source='duckduckgo'
-                )
-                results.append(result)
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"DuckDuckGo search failed: {str(e)}")
-            raise SearchError(f"Search failed: {str(e)}")
+        """Search using DuckDuckGo with exponential backoff on rate limits."""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                with DDGS() as ddgs:
+                    raw_results = list(ddgs.text(query, max_results=max_results, backend="html"))
+                return [
+                    SearchResult(
+                        title=item.get('title', ''),
+                        url=item.get('href', ''),
+                        snippet=item.get('body', ''),
+                        source='duckduckgo'
+                    )
+                    for item in raw_results
+                ]
+            except Exception as e:
+                err = str(e)
+                if "Ratelimit" in err or "ratelimit" in err.lower():
+                    if attempt < max_retries - 1:
+                        wait = (5 * (2 ** attempt)) + random.uniform(0, 2)
+                        logger.warning(f"DuckDuckGo rate limit on attempt {attempt+1}, retrying in {wait:.1f}s...")
+                        time.sleep(wait)
+                        continue
+                    logger.warning(f"DuckDuckGo rate limit persists after {max_retries} attempts for '{query}'. Returning empty.")
+                    return []
+                logger.error(f"DuckDuckGo search failed: {err}")
+                raise SearchError(f"Search failed: {err}")
     
     def _get_from_cache(self, query: str) -> Optional[List[SearchResult]]:
         """Get results from cache if not expired.

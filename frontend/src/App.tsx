@@ -2,10 +2,14 @@ import { useState, useCallback } from 'react'
 import ChatInterface from './components/ChatInterface'
 import Analytics from './components/Analytics'
 import About from './components/About'
+import PersonalAssistant from './components/PersonalAssistant'
+import NewsPage from './components/NewsPage'
+import DatabasePage from './components/DatabasePage'
+import MCPServersPage from './components/MCPServersPage'
 import Sidebar from './components/Sidebar'
 import GenieLogo from './components/GenieLogo'
 import SplashScreen from './components/SplashScreen'
-import { Sparkles, Moon, Sun, MessageSquare, BarChart3, X, Info, ExternalLink } from 'lucide-react'
+import { Sparkles, Moon, Sun, MessageSquare, BarChart3, X, Info, ExternalLink, Brain, Newspaper, DatabaseZap, Plug } from 'lucide-react'
 import { useTheme } from './contexts/ThemeContext'
 // @ts-ignore - will be installed
 import ReactMarkdown from 'react-markdown'
@@ -16,7 +20,7 @@ function App() {
   })
   const [conversationId] = useState('default')
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
-  const [activeView, setActiveView] = useState<'chat' | 'analytics' | 'about'>('chat')
+  const [activeView, setActiveView] = useState<'chat' | 'analytics' | 'about' | 'assistant' | 'news' | 'database' | 'mcp'>('chat')
   const [refreshDocuments, setRefreshDocuments] = useState(0)
   const [summary, setSummary] = useState<any>(null)
   const { theme, toggleTheme } = useTheme()
@@ -68,9 +72,9 @@ function App() {
       />
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         {/* Header - Professional */}
-        <header className={`backdrop-blur-2xl border-b px-6 py-3 shadow-lg transition-colors ${
+        <header className={`flex-shrink-0 backdrop-blur-2xl border-b px-6 py-3 shadow-lg transition-colors z-20 ${
           theme === 'dark'
             ? 'bg-slate-900/80 border-slate-700/50'
             : 'bg-white/80 border-gray-200'
@@ -123,6 +127,36 @@ function App() {
                   Analytics
                 </button>
                 <button
+                  onClick={() => setActiveView('news')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                    activeView === 'news'
+                      ? theme === 'dark'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-blue-500 text-white'
+                      : theme === 'dark'
+                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                      : 'bg-gray-100 hover:bg-gray-200 text-slate-700'
+                  }`}
+                >
+                  <Newspaper className="w-4 h-4" />
+                  News
+                </button>
+                <button
+                  onClick={() => setActiveView('database')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                    activeView === 'database'
+                      ? theme === 'dark'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-blue-500 text-white'
+                      : theme === 'dark'
+                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                      : 'bg-gray-100 hover:bg-gray-200 text-slate-700'
+                  }`}
+                >
+                  <DatabaseZap className="w-4 h-4" />
+                  DB Viewer
+                </button>
+                <button
                   onClick={() => setActiveView('about')}
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
                     activeView === 'about'
@@ -136,6 +170,36 @@ function App() {
                 >
                   <Info className="w-4 h-4" />
                   About
+                </button>
+                <button
+                  onClick={() => setActiveView('mcp')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                    activeView === 'mcp'
+                      ? theme === 'dark'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-blue-500 text-white'
+                      : theme === 'dark'
+                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                      : 'bg-gray-100 hover:bg-gray-200 text-slate-700'
+                  }`}
+                >
+                  <Plug className="w-4 h-4" />
+                  MCP Servers
+                </button>
+                <button
+                  onClick={() => setActiveView('assistant')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                    activeView === 'assistant'
+                      ? theme === 'dark'
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-purple-500 text-white'
+                      : theme === 'dark'
+                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                      : 'bg-gray-100 hover:bg-gray-200 text-slate-700'
+                  }`}
+                >
+                  <Brain className="w-4 h-4" />
+                  Assistant
                 </button>
               </div>
               <div className="flex gap-2">
@@ -176,14 +240,14 @@ function App() {
           </div>
         </header>
 
-        {/* Main Content - Chat, Analytics, or About */}
-        {activeView === 'chat' ? (
-          <ChatInterface conversationId={conversationId} />
-        ) : activeView === 'analytics' ? (
-          <Analytics onDocumentAdded={handleDocumentAdded} />
-        ) : (
-          <About />
-        )}
+        {/* Main Content — all pages stay mounted; CSS hides inactive ones */}
+        <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'chat'      ? '' : 'hidden'}`}><ChatInterface conversationId={conversationId} /></div>
+        <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'analytics'  ? '' : 'hidden'}`}><Analytics onDocumentAdded={handleDocumentAdded} /></div>
+        <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'assistant'  ? '' : 'hidden'}`}><PersonalAssistant /></div>
+        <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'news'       ? '' : 'hidden'}`}><NewsPage /></div>
+        <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'database'   ? '' : 'hidden'}`}><DatabasePage /></div>
+        <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'mcp'        ? '' : 'hidden'}`}><MCPServersPage /></div>
+        <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'about'      ? '' : 'hidden'}`}><About /></div>
       </div>
 
       {/* Summary Full-Screen Modal - Centered in Chat Area */}

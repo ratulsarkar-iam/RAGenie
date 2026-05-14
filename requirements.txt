@@ -22,6 +22,9 @@ langchain-community==0.0.16
 # MCP (Model Context Protocol)
 mcp==1.17.0
 
+# macOS Integrations (for MCP clients)
+pyobjc-framework-EventKit>=10.0
+
 # Search
 duckduckgo-search==4.1.1
 
@@ -48,6 +51,10 @@ plotly>=5.17.0
 # RAG and Text Processing
 rank-bm25==0.2.2
 
+# Vector Database and Embeddings
+chromadb>=0.4.0
+sentence-transformers>=2.2.2
+
 # Configuration and Validation
 pydantic>=2.11.0,<3.0.0
 pydantic-settings>=2.5.2
@@ -55,6 +62,10 @@ pyyaml==6.0.1
 
 # Database
 aiosqlite==0.19.0
+
+# Security
+python-json-logger>=2.0.0
+PyJWT>=2.8.0
 
 # Utilities
 python-dotenv==1.0.0

@@ -16,11 +16,19 @@ export interface FileAttachment {
   doc_id?: string
 }
 
+export interface ToolCallEvent {
+  tool: string
+  args: string
+  result?: string
+  error?: string
+}
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: string
   attachments?: FileAttachment[]
+  toolCalls?: ToolCallEvent[]
 }
 
 interface ChatInterfaceProps {
@@ -32,6 +40,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [streamingContent, setStreamingContent] = useState('')
   const [processingStatus, setProcessingStatus] = useState<string>('')
+  const pendingToolCallsRef = useRef<ToolCallEvent[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<ChatWebSocket | null>(null)
   const [isHistoryOpen, setIsHistoryOpen] = useState(false)
@@ -77,6 +86,40 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     ws.onMessage((message) => {
       console.log('Received WebSocket message:', message.type, message.content ? `${message.content.substring(0, 50)}...` : 'no content')
       switch (message.type) {
+        case 'tool_call':
+          setIsLoading(true)
+          setProcessingStatus(`Calling ${message.tool}…`)
+          pendingToolCallsRef.current = [
+            ...pendingToolCallsRef.current,
+            { tool: message.tool || '', args: message.args || '' }
+          ]
+          break
+
+        case 'tool_result': {
+          const tc = pendingToolCallsRef.current
+          const last = tc.length > 0 ? tc[tc.length - 1] : undefined
+          if (last && last.tool === message.tool && last.result === undefined) {
+            pendingToolCallsRef.current = [
+              ...pendingToolCallsRef.current.slice(0, -1),
+              { ...last, result: message.result }
+            ]
+          }
+          setProcessingStatus('Processing result…')
+          break
+        }
+
+        case 'tool_error': {
+          const tc2 = pendingToolCallsRef.current
+          const lastErr = tc2.length > 0 ? tc2[tc2.length - 1] : undefined
+          if (lastErr && lastErr.tool === message.tool) {
+            pendingToolCallsRef.current = [
+              ...pendingToolCallsRef.current.slice(0, -1),
+              { ...lastErr, error: message.error }
+            ]
+          }
+          break
+        }
+
         case 'stream_start':
           setStreamingContent('')
           setIsLoading(true)
@@ -108,10 +151,15 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
 
         case 'assistant_message':
           if (message.content) {
+            const toolCalls = pendingToolCallsRef.current.length > 0
+              ? [...pendingToolCallsRef.current]
+              : undefined
+            pendingToolCallsRef.current = []
             const assistantMessage: Message = {
               role: 'assistant',
               content: message.content,
-              timestamp: new Date().toISOString()
+              timestamp: new Date().toISOString(),
+              toolCalls,
             }
             setMessages(prev => [...prev, assistantMessage])
           }
@@ -125,6 +173,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
           break
 
         case 'error':
+          pendingToolCallsRef.current = []
           const errorMessage: Message = {
             role: 'assistant',
             content: message.content || 'Sorry, I encountered an error. Please try again.',
@@ -148,7 +197,7 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     }
   }, [])
 
-  const handleSendMessage = async (content: string, useReasoning: boolean = false, files?: File[]) => {
+  const handleSendMessage = async (content: string, useReasoning: boolean = false, files?: File[], useAgent: boolean = false) => {
     if (!wsRef.current || !wsRef.current.isConnected()) {
       console.error('WebSocket not connected')
       return
@@ -208,8 +257,10 @@ export default function ChatInterface({ conversationId }: ChatInterfaceProps) {
     setMessages(prev => [...prev, userMessage])
 
     try {
-      // Send via WebSocket with reasoning flag
-      wsRef.current.sendMessage(messageToSend, conversationId, false, useReasoning)
+      // Send via WebSocket — agent mode enables MCP tool use
+      wsRef.current.sendMessage(messageToSend, conversationId, useAgent, useReasoning)
+      setIsLoading(true)
+      setProcessingStatus(useAgent ? 'Agent mode — calling tools…' : 'Thinking...')
     } catch (error) {
       console.error('Error sending message:', error)
       const errorMessage: Message = {

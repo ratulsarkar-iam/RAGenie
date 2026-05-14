@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { User, Brain, FileText, Image, Music, FileSpreadsheet } from 'lucide-react'
+import { User, Brain, FileText, Image, Music, FileSpreadsheet, ThumbsUp, ThumbsDown, Wrench, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react'
 import GenieLogo from './GenieLogo'
 import { useTheme } from '../contexts/ThemeContext'
-import type { FileAttachment } from './ChatInterface'
+import type { FileAttachment, ToolCallEvent } from './ChatInterface'
+import { submitFeedback } from '../api/assistant'
 
 function getAttachmentIcon(fileType: string) {
   if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'svg'].includes(fileType)) return Image
@@ -17,12 +19,69 @@ function formatFileSize(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function ToolCallBubble({ ev }: { ev: ToolCallEvent }) {
+  const { theme } = useTheme()
+  const [open, setOpen] = useState(false)
+  const isError = Boolean(ev.error)
+  return (
+    <div className={`rounded-lg border text-xs overflow-hidden mb-2 ${
+      isError
+        ? theme === 'dark' ? 'bg-red-900/20 border-red-500/30' : 'bg-red-50 border-red-200'
+        : theme === 'dark' ? 'bg-slate-700/60 border-slate-600' : 'bg-gray-50 border-gray-200'
+    }`}>
+      <button onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:opacity-80 transition-opacity">
+        {isError
+          ? <AlertCircle className="w-3 h-3 text-red-400 flex-shrink-0" />
+          : <Wrench className="w-3 h-3 text-blue-400 flex-shrink-0" />}
+        <code className={`font-mono font-medium ${isError ? 'text-red-400' : 'text-blue-400'}`}>{ev.tool}</code>
+        {!open && !isError && ev.result && (
+          <span className={`ml-2 truncate max-w-[200px] ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+            → {ev.result.slice(0, 60)}
+          </span>
+        )}
+        <span className={`ml-auto flex-shrink-0 ${theme === 'dark' ? 'text-slate-500' : 'text-slate-400'}`}>
+          {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        </span>
+      </button>
+      {open && (
+        <div className={`border-t px-3 py-2 space-y-2 ${theme === 'dark' ? 'border-slate-600' : 'border-gray-200'}`}>
+          {ev.args && (
+            <div>
+              <p className={`text-xs font-medium mb-1 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Input</p>
+              <pre className={`text-xs font-mono whitespace-pre-wrap break-all rounded p-2 ${
+                theme === 'dark' ? 'bg-slate-900 text-slate-300' : 'bg-white text-slate-700 border border-gray-200'
+              }`}>{ev.args}</pre>
+            </div>
+          )}
+          {ev.error ? (
+            <div>
+              <p className="text-xs font-medium mb-1 text-red-400">Error</p>
+              <pre className={`text-xs font-mono whitespace-pre-wrap break-all rounded p-2 ${
+                theme === 'dark' ? 'bg-red-900/30 text-red-300' : 'bg-red-50 text-red-700 border border-red-200'
+              }`}>{ev.error}</pre>
+            </div>
+          ) : ev.result ? (
+            <div>
+              <p className={`text-xs font-medium mb-1 ${theme === 'dark' ? 'text-slate-400' : 'text-slate-500'}`}>Result</p>
+              <pre className={`text-xs font-mono whitespace-pre-wrap break-all rounded p-2 max-h-48 overflow-y-auto ${
+                theme === 'dark' ? 'bg-slate-900 text-emerald-300' : 'bg-white text-emerald-700 border border-gray-200'
+              }`}>{ev.result}</pre>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
   timestamp: string
   useReasoning?: boolean
   attachments?: FileAttachment[]
+  toolCalls?: ToolCallEvent[]
 }
 
 interface MessageListProps {
@@ -32,6 +91,17 @@ interface MessageListProps {
 
 export default function MessageList({ messages, streamingContent = '' }: MessageListProps) {
   const { theme } = useTheme()
+  const [feedbackSent, setFeedbackSent] = useState<Record<number, 'thumbs_up' | 'thumbs_down'>>({})
+
+  const handleFeedback = async (index: number, rating: 'thumbs_up' | 'thumbs_down') => {
+    if (feedbackSent[index]) return
+    setFeedbackSent(prev => ({ ...prev, [index]: rating }))
+    try {
+      await submitFeedback('explicit', rating, `msg-${index}`)
+    } catch {
+      // silent — feedback is best-effort
+    }
+  }
   
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -91,6 +161,12 @@ export default function MessageList({ messages, streamingContent = '' }: Message
                 )}
               </div>
             ) : (
+              <div>
+              {message.toolCalls && message.toolCalls.length > 0 && (
+                <div className="mb-3">
+                  {message.toolCalls.map((ev, i) => <ToolCallBubble key={i} ev={ev} />)}
+                </div>
+              )}
               <div className={`prose max-w-none ${
                 theme === 'dark' ? 'prose-invert' : 'prose-slate'
               }`}>
@@ -171,9 +247,44 @@ export default function MessageList({ messages, streamingContent = '' }: Message
                   {message.content}
                 </ReactMarkdown>
               </div>
+              </div>
             )}
-            <div className="text-xs opacity-60 mt-2">
-              {new Date(message.timestamp).toLocaleTimeString()}
+            <div className="flex items-center justify-between mt-2">
+              <span className="text-xs opacity-60">
+                {new Date(message.timestamp).toLocaleTimeString()}
+              </span>
+              {message.role === 'assistant' && (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => handleFeedback(index, 'thumbs_up')}
+                    disabled={!!feedbackSent[index]}
+                    title="Good response"
+                    className={`p-1 rounded-lg transition-all disabled:cursor-default ${
+                      feedbackSent[index] === 'thumbs_up'
+                        ? 'text-green-400'
+                        : theme === 'dark'
+                        ? 'text-slate-500 hover:text-green-400 hover:bg-slate-700'
+                        : 'text-slate-400 hover:text-green-500 hover:bg-gray-100'
+                    }`}
+                  >
+                    <ThumbsUp className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleFeedback(index, 'thumbs_down')}
+                    disabled={!!feedbackSent[index]}
+                    title="Poor response"
+                    className={`p-1 rounded-lg transition-all disabled:cursor-default ${
+                      feedbackSent[index] === 'thumbs_down'
+                        ? 'text-red-400'
+                        : theme === 'dark'
+                        ? 'text-slate-500 hover:text-red-400 hover:bg-slate-700'
+                        : 'text-slate-400 hover:text-red-500 hover:bg-gray-100'
+                    }`}
+                  >
+                    <ThumbsDown className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

@@ -82,7 +82,7 @@ class PageIndexStore(DocumentStore):
     def search_chunks(self, query: str, top_k: int = 3) -> List[Chunk]:
         """Search for relevant chunks using BM25 with medical term expansion."""
         if not self.bm25 or not self.chunks:
-            logger.warning("No chunks in index")
+            logger.debug("No chunks in index")
             return []
         
         # Expand medical terminology
@@ -164,9 +164,9 @@ class PageIndexStore(DocumentStore):
         try:
             data = {
                 "documents": {
-                    doc_id: doc.dict() for doc_id, doc in self.documents.items()
+                    doc_id: doc.model_dump() for doc_id, doc in self.documents.items()
                 },
-                "chunks": [chunk.dict() for chunk in self.chunks]
+                "chunks": [chunk.model_dump() for chunk in self.chunks]
             }
             
             with open(self.index_path, 'w') as f:

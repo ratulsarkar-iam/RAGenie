@@ -1,9 +1,14 @@
 from fastapi import WebSocket, WebSocketDisconnect
-from typing import Dict
+from typing import Any, Dict, List, Optional
 import json
 import asyncio
+from langchain.callbacks.base import AsyncCallbackHandler
 from ..core.logging_config import get_logger
 from ..utils.reasoning_detector import detect_reasoning_needed
+from ..security.ws_security import validate_ws_message, check_ws_rate_limit, cleanup_client
+from ..security.audit_logger import get_audit_logger
+from ..security.document_filter import filter_document_chunk
+from ..security.prompt_builder import build_secure_prompt
 
 logger = get_logger(__name__)
 
@@ -42,6 +47,44 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+class ToolCallStreamingCallback(AsyncCallbackHandler):
+    """Sends tool_call / tool_result / tool_error events to the WebSocket client."""
+
+    def __init__(self, client_id: str):
+        super().__init__()
+        self.client_id = client_id
+        self._current_tool: Optional[str] = None
+
+    async def on_tool_start(
+        self, serialized: Dict[str, Any], input_str: str, **kwargs: Any
+    ) -> None:
+        self._current_tool = serialized.get("name", "unknown_tool")
+        await manager.send_message(self.client_id, {
+            "type": "tool_call",
+            "tool": self._current_tool,
+            "args": input_str,
+        })
+
+    async def on_tool_end(self, output: Any, **kwargs: Any) -> None:
+        result_str = (
+            output.content if hasattr(output, "content") else str(output)
+        )[:800]
+        await manager.send_message(self.client_id, {
+            "type": "tool_result",
+            "tool": self._current_tool or "unknown_tool",
+            "result": result_str,
+        })
+        self._current_tool = None
+
+    async def on_tool_error(self, error: Exception, **kwargs: Any) -> None:
+        await manager.send_message(self.client_id, {
+            "type": "tool_error",
+            "tool": self._current_tool or "unknown_tool",
+            "error": str(error),
+        })
+        self._current_tool = None
+
+
 async def handle_chat_websocket(websocket: WebSocket, client_id: str, orchestrator):
     """Handle WebSocket chat connection with streaming."""
     await manager.connect(websocket, client_id)
@@ -50,6 +93,24 @@ async def handle_chat_websocket(websocket: WebSocket, client_id: str, orchestrat
         while True:
             # Receive message from client
             data = await websocket.receive_json()
+
+            # --- Security: validate message structure ---
+            is_valid, error_msg = validate_ws_message(data)
+            if not is_valid:
+                get_audit_logger().ws_invalid_message(client_id=client_id, reason=error_msg)
+                await manager.send_message(client_id, {"type": "error", "content": error_msg})
+                continue
+
+            # --- Security: rate limit per client ---
+            allowed, retry_after = check_ws_rate_limit(client_id)
+            if not allowed:
+                get_audit_logger().ws_rate_limit_hit(client_id=client_id)
+                await manager.send_message(client_id, {
+                    "type": "error",
+                    "content": f"Rate limit exceeded. Retry after {retry_after}s."
+                })
+                continue
+
             message = data.get("message", "")
             conversation_id = data.get("conversation_id", "default")
             use_agent = data.get("use_agent", False)
@@ -60,10 +121,7 @@ async def handle_chat_websocket(websocket: WebSocket, client_id: str, orchestrat
                 use_reasoning = True
                 logger.info(f"Auto-detected reasoning needed for: {message[:50]}...")
             
-            if not message:
-                continue
-            
-            logger.info(f"WebSocket message from {client_id}: {message} (reasoning={use_reasoning})")
+            logger.info(f"WebSocket message from {client_id} (len={len(message)}, reasoning={use_reasoning})")
             
             # Start or resume conversation
             if orchestrator.conversation is None or orchestrator.conversation.conversation_id != conversation_id:
@@ -81,9 +139,9 @@ async def handle_chat_websocket(websocket: WebSocket, client_id: str, orchestrat
             try:
                 # Generate response with streaming
                 if use_agent:
-                    # For agent mode, we can't easily stream, so send complete response
                     logger.info(f"WebSocket agent mode activated for: {message[:50]}...")
-                    response = orchestrator.chat(message)
+                    tool_callback = ToolCallStreamingCallback(client_id)
+                    response = await orchestrator.achat(message, callbacks=[tool_callback])
                     await manager.send_message(client_id, {
                         "type": "assistant_message",
                         "content": response,
@@ -224,46 +282,42 @@ Assistant:"""
     
     except WebSocketDisconnect:
         manager.disconnect(client_id)
-        logger.info(f"Client {client_id} disconnected")
+        cleanup_client(client_id)
     
     except Exception as e:
         logger.error(f"WebSocket error: {str(e)}")
         manager.disconnect(client_id)
+        cleanup_client(client_id)
 
 
 async def stream_simple_response(websocket: WebSocket, client_id: str, message: str, orchestrator, use_reasoning: bool = False):
     """Stream a simple response token by token."""
     from ..rag.context_builder import ContextBuilder
     from ..llm.prompts import SYSTEM_PROMPT
-    
+
     # Search RAG for context
-    chunks = orchestrator.rag_store.search_chunks(message, top_k=5)
-    
+    raw_chunks = orchestrator.rag_store.search_chunks(message, top_k=5)
+
+    # --- Security: filter document chunks ---
+    safe_chunks = []
+    for chunk in raw_chunks:
+        f = filter_document_chunk(chunk.content)
+        if not f.blocked:
+            chunk.content = f.content
+            safe_chunks.append(chunk)
+
     # Get conversation history
     history = orchestrator._format_history(exclude_last_user=True)
-    
-    # Build prompt with context and history
+
+    # --- Security: build secure delimited prompt ---
     context_builder = ContextBuilder()
-    if chunks:
-        context = context_builder.build_context(chunks)
-        prompt = f"""{SYSTEM_PROMPT}
-
-{f"## Conversation History\n{history}\n" if history else ""}## Retrieved Context
-Use the following context to answer the question. If the context doesn't contain relevant information, answer based on your general knowledge.
-
-{context}
-
-## Current Message
-User: {message}
-
-Assistant:"""
-    else:
-        prompt = f"""{SYSTEM_PROMPT}
-
-{f"## Conversation History\n{history}\n" if history else ""}## Current Message
-User: {message}
-
-Assistant:"""
+    documents = context_builder.build_context(safe_chunks) if safe_chunks else ""
+    prompt = build_secure_prompt(
+        system=SYSTEM_PROMPT,
+        user_query=message,
+        documents=documents,
+        history=history,
+    )
     
     # Send start signal
     await manager.send_message(client_id, {
