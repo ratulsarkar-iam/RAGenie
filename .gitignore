@@ -65,7 +65,7 @@ coverage.xml
 *.junit.xml
 
 # ── Generated / Build Artifacts ───────────────────────────────────────────────
-*.pptx
+# *.pptx
 *.pdf.generated
 openspec/changes/archive/
 
