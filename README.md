@@ -180,6 +180,7 @@ RAGenie is a self-hosted AI assistant that combines four core capabilities — *
 
 ## Quick Start
 
+**macOS / Linux:**
 ```bash
 # 1. Clone the repository
 git clone https://github.com/ratulsarkar-iam/RAGenie.git
@@ -208,9 +209,44 @@ npm install
 npm run dev
 ```
 
+**Windows (PowerShell):**
+```powershell
+# 1. Clone the repository
+git clone https://github.com/ratulsarkar-iam/RAGenie.git
+cd RAGenie
+
+# 2. Create virtual environment
+python -m venv venv
+
+# 3. Activate virtual environment
+# Allow script execution (one-time, if not already set)
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+venv\Scripts\activate
+
+# 4. Install Python dependencies
+pip install -r requirements.txt
+
+# 5. Install Ollama and pull a model
+# Install Ollama from https://ollama.com
+ollama pull llama3.2
+
+# 6. Create required directories
+mkdir data\documents, data\index, logs
+
+# 7. Start the backend
+python run_server.py
+
+# 8. Start the frontend (in a new terminal)
+cd frontend
+npm install
+npm run dev
+```
+
+> **Windows (cmd alternative):** If you prefer Command Prompt, activate with `venv\Scripts\activate.bat` instead.
+
 Open `http://localhost:5173` in your browser. Backend API is at `http://localhost:8000`.
 
-> **One-command start:** Use `./start.sh` to launch both backend and frontend together.
+> **One-command start (macOS/Linux):** Use `./start.sh` to launch both backend and frontend together.
 
 ---
 
@@ -228,12 +264,35 @@ Open `http://localhost:5173` in your browser. Backend API is at `http://localhos
 
 ### Backend Setup
 
+**macOS / Linux:**
 ```bash
 cd RAGenie
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 mkdir -p data/documents data/index logs
+```
+
+**Windows (PowerShell):**
+```powershell
+cd RAGenie
+python -m venv venv
+# Allow script execution if not already set (one-time)
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+venv\Scripts\activate
+pip install -r requirements.txt
+mkdir data\documents, data\index, logs
+```
+
+**Windows (Command Prompt):**
+```cmd
+cd RAGenie
+python -m venv venv
+venv\Scripts\activate.bat
+pip install -r requirements.txt
+mkdir data\documents
+mkdir data\index
+mkdir logs
 ```
 
 ### Frontend Setup
@@ -304,11 +363,28 @@ search:
 
 ### Environment Variable Overrides
 
+**macOS / Linux:**
 ```bash
 export LLM_MODEL_NAME="qwen2.5:7b"
 export LLM_TEMPERATURE="0.8"
 export RAG_CHUNK_SIZE="1500"
 export SERVER_PORT="8080"
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:LLM_MODEL_NAME="qwen2.5:7b"
+$env:LLM_TEMPERATURE="0.8"
+$env:RAG_CHUNK_SIZE="1500"
+$env:SERVER_PORT="8080"
+```
+
+**Windows (Command Prompt):**
+```cmd
+set LLM_MODEL_NAME=qwen2.5:7b
+set LLM_TEMPERATURE=0.8
+set RAG_CHUNK_SIZE=1500
+set SERVER_PORT=8080
 ```
 
 ---
@@ -1101,8 +1177,8 @@ RAGenie/
 
 | Problem | Solution |
 |---|---|
-| Port 8000 in use | Change `server.port` in `config.yaml` or kill the process: `lsof -i :8000` |
-| Import errors | Ensure venv is activated: `source venv/bin/activate` |
+| Port 8000 in use | Change `server.port` in `config.yaml`. Kill the process — macOS/Linux: `lsof -i :8000 && kill -9 <PID>` · Windows: `netstat -ano \| findstr :8000` then `taskkill /PID <PID> /F` |
+| Import errors | Ensure venv is activated — macOS/Linux: `source venv/bin/activate` · Windows PowerShell: `venv\Scripts\activate` · Windows cmd: `venv\Scripts\activate.bat` |
 | Slow responses | Reduce `max_tokens`, use a smaller model, close other apps |
 
 ### Frontend Issues
@@ -1110,7 +1186,7 @@ RAGenie/
 | Problem | Solution |
 |---|---|
 | `npm install` fails | Delete `node_modules` and `package-lock.json`, then retry |
-| Port 5173 in use | Kill the process: `lsof -i :5173` |
+| Port 5173 in use | macOS/Linux: `lsof -i :5173 && kill -9 <PID>` · Windows: `netstat -ano \| findstr :5173` then `taskkill /PID <PID> /F` |
 | API connection errors | Ensure backend is running. Check CORS in `config.yaml` |
 
 ### RAG Issues
