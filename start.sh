@@ -1,7 +1,12 @@
 #!/bin/bash
 
 # RAGenie Startup Script
+<<<<<<< HEAD
 # Starts backend (and optionally frontend) based on config.yaml
+=======
+# This script activates the virtual environment and starts both backend and frontend
+# Supports multiple operational modes based on config.yaml.
+>>>>>>> 9f5e817fa338fd28ac223784e95a9ce60c26af52
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
