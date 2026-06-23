@@ -2,7 +2,7 @@
 
 # RAGenie Startup Script
 # This script activates the virtual environment and starts both backend and frontend
-# Supports multiple operational modes based on config.yaml
+# Supports multiple operational modes based on config.yaml.
 
 set -e  # Exit on error
 
