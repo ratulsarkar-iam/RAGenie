@@ -38,7 +38,7 @@ data/news/               # news articles cache
 data/notes/              # proactive notes
 data/conversations.db    # (also matched by *.db above)
 static/analytics/        # generated Plotly chart files
-
+data/
 # ── Data files (explicit, per-file) ──────────────────────────────────────────
 data/analytics/datasets.json
 data/analytics/uploads/DSA_Math_Formulas.xlsx

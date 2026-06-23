@@ -1,307 +1,199 @@
 #!/bin/bash
 
 # RAGenie Startup Script
-# This script activates the virtual environment and starts both backend and frontend
-# Supports multiple operational modes based on config.yaml
+# Starts backend (and optionally frontend) based on config.yaml
 
-set -e  # Exit on error
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
 
-# Default values (can be overridden by config)
+# ── Colors ────────────────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+BLUE='\033[0;34m'; NC='\033[0m'
+
+# ── Defaults (overridden by config.yaml) ──────────────────────────────────────
 BACKEND_HOST="localhost"
 BACKEND_PORT="8000"
 FRONTEND_PORT="3000"
 MODE="hybrid"
 
-# Function to load configuration from config.yaml
-load_config() {
-    if [ -f "config/config.yaml" ]; then
-        echo -e "${GREEN}✓ Loading configuration from config.yaml${NC}"
-        
-        # Extract values from YAML using basic parsing
-        if command -v python3 >/dev/null 2>&1; then
-            eval $(python3 -c "
-import yaml, sys, re
+echo -e "${BLUE}============================================================${NC}"
+echo -e "${BLUE}              RAGenie — Starting up${NC}"
+echo -e "${BLUE}============================================================${NC}"
+echo ""
+
+# ── Load config.yaml (via temp file to avoid heredoc quoting issues) ──────────
+if [ -f "config/config.yaml" ] && command -v python3 &>/dev/null; then
+    echo -e "${BLUE}▸ Loading config.yaml${NC}"
+    _CFG_SCRIPT=$(mktemp /tmp/ragenie_cfg_XXXXXX.py)
+    cat > "$_CFG_SCRIPT" << 'PYEOF'
+import yaml, re, sys
 try:
-    with open('config/config.yaml', 'r') as f:
-        config = yaml.safe_load(f)
-    
-    # Server config
-    if 'server' in config:
-        print(f'BACKEND_HOST=\"{config[\"server\"].get(\"host\", \"localhost\")}\"')
-        print(f'BACKEND_PORT={config[\"server\"].get(\"port\", 8000)}')
-        if 'cors_origins' in config['server']:
-            for origin in config['server']['cors_origins']:
-                if '3000' in origin or '5173' in origin:
-                    port = re.search(r':(\d+)', origin)
-                    if port:
-                        print(f'FRONTEND_PORT={port.group(1)}')
-                    break
-    
-    # Mode
-    print(f'MODE=\"{config.get(\"mode\", \"hybrid\")}\"')
-    
+    cfg = yaml.safe_load(open("config/config.yaml"))
+    srv = cfg.get("server", {})
+    print('BACKEND_HOST="%s"' % srv.get("host", "localhost"))
+    print('BACKEND_PORT=%s' % srv.get("port", 8000))
+    for o in srv.get("cors_origins", []):
+        m = re.search(r":(\d+)", o)
+        if m and m.group(1) in ("3000", "5173"):
+            print('FRONTEND_PORT=%s' % m.group(1))
+            break
+    print('MODE="%s"' % cfg.get("mode", "hybrid"))
 except Exception as e:
-    print(f'echo Warning: Could not parse config.yaml: {e}', file=sys.stderr)
-")
-        else
-            echo -e "${YELLOW}Warning: Python3 not found, using default configuration${NC}"
-        fi
-    else
-        echo -e "${YELLOW}Warning: config/config.yaml not found, using default configuration${NC}"
-    fi
-}
+    sys.stderr.write("Warning: could not parse config.yaml: %s\n" % e)
+PYEOF
+    eval "$(python3 "$_CFG_SCRIPT")"
+    rm -f "$_CFG_SCRIPT"
+fi
 
-echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}       RAGenie - Starting Backend & Frontend${NC}"
-echo -e "${BLUE}============================================================${NC}"
+echo -e "  Mode: ${GREEN}$MODE${NC}  |  Backend: ${GREEN}$BACKEND_HOST:$BACKEND_PORT${NC}  |  Frontend port: ${GREEN}$FRONTEND_PORT${NC}"
 echo ""
 
-# Load configuration
-load_config
-
-echo -e "${BLUE}Configuration:${NC}"
-echo -e "  Mode: ${GREEN}$MODE${NC}"
-echo -e "  Backend: ${GREEN}$BACKEND_HOST:$BACKEND_PORT${NC}"
-echo -e "  Frontend: ${GREEN}localhost:$FRONTEND_PORT${NC}"
-echo ""
-
-# Check if virtual environment exists
+# ── Pre-flight: venv ──────────────────────────────────────────────────────────
 if [ ! -d "venv" ]; then
-    echo -e "${RED}Error: Virtual environment not found!${NC}"
-    echo -e "${YELLOW}Please run: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt${NC}"
-    exit 1
+    echo -e "${YELLOW}▸ Creating Python virtual environment...${NC}"
+    python3 -m venv venv || { echo -e "${RED}✗ Failed to create venv${NC}"; exit 1; }
+    echo -e "${GREEN}✓ Virtual environment created${NC}"
 fi
 
-# Check if frontend node_modules exists
-if [ ! -d "frontend/node_modules" ]; then
-    echo -e "${YELLOW}Frontend dependencies not installed. Installing...${NC}"
-    cd frontend
-    npm install
-    cd ..
-    echo -e "${GREEN}✓ Frontend dependencies installed${NC}"
-    echo ""
-fi
-
-# Create logs directory if it doesn't exist
-mkdir -p logs
-
-# Function to cleanup on exit
-cleanup() {
-    echo ""
-    echo -e "${YELLOW}Shutting down servers...${NC}"
-    
-    # Send SIGTERM to frontend first (it usually shuts down faster)
-    if [ ! -z "$FRONTEND_PID" ] && kill -0 $FRONTEND_PID 2>/dev/null; then
-        echo -e "${YELLOW}⏳ Stopping frontend...${NC}"
-        kill $FRONTEND_PID 2>/dev/null
-        
-        # Wait for frontend to stop (max 30 seconds)
-        COUNTER=0
-        while kill -0 $FRONTEND_PID 2>/dev/null && [ $COUNTER -lt 30 ]; do
-            sleep 1
-            COUNTER=$((COUNTER + 1))
-        done
-        
-        # Force kill if still running
-        if kill -0 $FRONTEND_PID 2>/dev/null; then
-            echo -e "${YELLOW}   Force stopping frontend...${NC}"
-            kill -9 $FRONTEND_PID 2>/dev/null
-        fi
-        echo -e "${GREEN}✓ Frontend stopped${NC}"
-    fi
-    
-    # Send SIGTERM to backend
-    if [ ! -z "$BACKEND_PID" ] && kill -0 $BACKEND_PID 2>/dev/null; then
-        echo -e "${YELLOW}⏳ Stopping backend...${NC}"
-        kill $BACKEND_PID 2>/dev/null
-        
-        # Wait for backend to stop (max 30 seconds)
-        COUNTER=0
-        while kill -0 $BACKEND_PID 2>/dev/null && [ $COUNTER -lt 30 ]; do
-            sleep 1
-            COUNTER=$((COUNTER + 1))
-        done
-        
-        # Force kill if still running
-        if kill -0 $BACKEND_PID 2>/dev/null; then
-            echo -e "${YELLOW}   Force stopping backend...${NC}"
-            kill -9 $BACKEND_PID 2>/dev/null
-        fi
-        echo -e "${GREEN}✓ Backend stopped${NC}"
-    fi
-    
-    # Kill any remaining child processes
-    pkill -P $$ 2>/dev/null
-    
-    echo -e "${GREEN}Shutdown complete${NC}"
-    exit 0
-}
-
-# Set trap to cleanup on Ctrl+C
-trap cleanup SIGINT SIGTERM
-
-# Activate virtual environment
-echo -e "${GREEN}✓ Activating virtual environment...${NC}"
+# Activate venv
 source venv/bin/activate
 
-# Install/update Python dependencies if needed
-echo -e "${YELLOW}⏳ Checking Python dependencies...${NC}"
-pip install -r requirements.txt > logs/pip_install.log 2>&1 || {
-    echo -e "${YELLOW}Some dependencies may have failed to install. Check logs/pip_install.log${NC}"
-}
-echo -e "${GREEN}✓ Dependencies ready${NC}"
+# ── Install / update Python dependencies ─────────────────────────────────────
+echo -e "${YELLOW}▸ Checking Python dependencies (pip install -r requirements.txt)...${NC}"
+mkdir -p logs
+if pip install -q -r requirements.txt > logs/pip_install.log 2>&1; then
+    echo -e "${GREEN}✓ Python dependencies ready${NC}"
+else
+    echo -e "${YELLOW}  Some packages had issues — see logs/pip_install.log${NC}"
+fi
 
-# Start backend server in background
-echo -e "${YELLOW}⏳ Starting backend server...${NC}"
-python run_server.py > logs/server.log 2>&1 &
-BACKEND_PID=$!
-
-# Wait for backend to be ready with progress indicator
-echo -n "   Waiting for backend to be ready "
-MAX_WAIT=180  # Maximum wait time in seconds (3 minutes)
-COUNTER=0
-BACKEND_READY=false
-
-while [ $COUNTER -lt $MAX_WAIT ]; do
-    # Check if process is still running
-    if ! kill -0 $BACKEND_PID 2>/dev/null; then
-        echo ""
-        echo -e "${RED}✗ Backend process died. Check logs/server.log${NC}"
-        echo -e "${RED}Last 10 lines of server log:${NC}"
-        tail -10 logs/server.log 2>/dev/null || echo "No log file found"
-        exit 1
+# ── Pre-flight: frontend node_modules ────────────────────────────────────────
+if [ "$MODE" != "mcp_server" ]; then
+    if [ ! -d "frontend/node_modules" ]; then
+        echo -e "${YELLOW}▸ Installing frontend dependencies (first run)...${NC}"
+        npm --prefix frontend install 2>&1 | tail -3
+        echo -e "${GREEN}✓ Frontend dependencies installed${NC}"
     fi
-    
-    # Check if backend is responding
-    if curl -s "http://$BACKEND_HOST:$BACKEND_PORT/health" > /dev/null 2>&1; then
-        BACKEND_READY=true
-        break
-    fi
-    
-    # Show progress
-    echo -n "."
-    sleep 1
-    COUNTER=$((COUNTER + 1))
-done
+fi
 
 echo ""
 
-if [ "$BACKEND_READY" = false ]; then
-    echo -e "${RED}✗ Backend failed to start within ${MAX_WAIT}s. Check logs/server.log${NC}"
-    echo -e "${RED}Last 10 lines of server log:${NC}"
-    tail -10 logs/server.log 2>/dev/null || echo "No log file found"
-    kill $BACKEND_PID 2>/dev/null
+# ── Cleanup on Ctrl+C / SIGTERM ──────────────────────────────────────────────
+cleanup() {
+    echo ""
+    echo -e "${YELLOW}▸ Shutting down...${NC}"
+
+    # Stop frontend first — also kill Vite child spawned by npm
+    if [ -n "$FRONTEND_PID" ] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
+        echo -e "  Stopping frontend (PID $FRONTEND_PID)..."
+        pkill -TERM -P "$FRONTEND_PID" 2>/dev/null || true   # kill npm's children (Vite)
+        kill -TERM "$FRONTEND_PID" 2>/dev/null               # kill npm itself
+        wait "$FRONTEND_PID" 2>/dev/null
+        pkill -TERM -f "vite" 2>/dev/null || true             # safety net
+        echo -e "${GREEN}  ✓ Frontend stopped${NC}"
+    fi
+
+    # Then stop backend
+    if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
+        echo -e "  Stopping backend  (PID $BACKEND_PID)..."
+        kill -TERM "$BACKEND_PID" 2>/dev/null
+        wait "$BACKEND_PID" 2>/dev/null
+        echo -e "${GREEN}  ✓ Backend stopped${NC}"
+    fi
+
+    echo -e "${GREEN}Done.${NC}"
+    exit 0
+}
+trap cleanup SIGINT SIGTERM
+
+# ── Helper: poll a URL until HTTP 200 is returned ─────────────────────────────
+# Usage: wait_for_url <label> <pid> <url> <log_file> [timeout_secs]
+wait_for_url() {
+    local label="$1" pid="$2" url="$3" log="$4" timeout="${5:-60}"
+    local elapsed=0 http_code
+
+    echo -n "   Waiting for $label to be ready "
+    while [ "$elapsed" -lt "$timeout" ]; do
+        # Bail early if the process already died
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo ""
+            echo -e "${RED}✗ $label process died. Last lines of $log:${NC}"
+            tail -15 "$log" 2>/dev/null
+            return 1
+        fi
+
+        # Capture HTTP status code; suppress errors so non-zero exit never aborts
+        http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+            --max-time 3 --connect-timeout 3 \
+            "$url" 2>/dev/null) || http_code=""
+
+        if [ "$http_code" = "200" ]; then
+            echo -e " ${GREEN}OK (${elapsed}s)${NC}"
+            return 0
+        fi
+
+        echo -n "."
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    echo ""
+    echo -e "${RED}✗ $label not ready after ${timeout}s (last HTTP: ${http_code:-no response})${NC}"
+    echo -e "${RED}  Check $log for details${NC}"
+    tail -15 "$log" 2>/dev/null
+    return 1
+}
+
+# ── Start backend ─────────────────────────────────────────────────────────────
+echo -e "${YELLOW}▸ Starting backend...${NC}"
+python run_server.py > logs/server.log 2>&1 &
+BACKEND_PID=$!
+echo -e "  PID: $BACKEND_PID  |  Log: logs/server.log"
+
+if ! wait_for_url "backend" "$BACKEND_PID" \
+        "http://$BACKEND_HOST:$BACKEND_PORT/health" \
+        "logs/server.log" 180; then
+    kill "$BACKEND_PID" 2>/dev/null
     exit 1
 fi
 
-echo -e "${GREEN}✓ Backend ready on http://$BACKEND_HOST:$BACKEND_PORT${NC}"
+echo -e "${GREEN}✓ Backend  →  http://$BACKEND_HOST:$BACKEND_PORT${NC}"
+echo -e "  API Docs:  http://$BACKEND_HOST:$BACKEND_PORT/docs"
+if [ "$MODE" = "hybrid" ]; then
+    echo -e "  MCP SSE:   http://0.0.0.0:8001/mcp"
+fi
+echo ""
 
-# Start frontend in background (only if mode is not "mcp_server")
+# ── Start frontend ────────────────────────────────────────────────────────────
 if [ "$MODE" != "mcp_server" ]; then
-    echo -e "${YELLOW}⏳ Starting frontend...${NC}"
-    cd frontend
-    npm run dev > ../logs/frontend.log 2>&1 &
+    echo -e "${YELLOW}▸ Starting frontend...${NC}"
+    npm --prefix frontend run dev > logs/frontend.log 2>&1 &
     FRONTEND_PID=$!
-    cd ..
-    
-    # Wait for frontend to be ready with progress indicator
-    echo -n "   Waiting for frontend to be ready "
-    MAX_WAIT_FRONTEND=180  # Maximum wait time in seconds (3 minutes)
-    COUNTER=0
-    FRONTEND_READY=false
-    
-    while [ $COUNTER -lt $MAX_WAIT_FRONTEND ]; do
-        # Check if process is still running
-        if ! kill -0 $FRONTEND_PID 2>/dev/null; then
-            echo ""
-            echo -e "${RED}✗ Frontend process died. Check logs/frontend.log${NC}"
-            echo -e "${RED}Last 10 lines of frontend log:${NC}"
-            tail -10 logs/frontend.log 2>/dev/null || echo "No log file found"
-            kill $BACKEND_PID 2>/dev/null
-            exit 1
-        fi
-        
-        # Check if frontend is responding (Vite dev server)
-        if curl -s "http://localhost:$FRONTEND_PORT" > /dev/null 2>&1; then
-            FRONTEND_READY=true
-            break
-        fi
-        
-        # Show progress
-        echo -n "."
-        sleep 1
-        COUNTER=$((COUNTER + 1))
-    done
-    
-    echo ""
-    
-    if [ "$FRONTEND_READY" = false ]; then
-        echo -e "${RED}✗ Frontend failed to start within ${MAX_WAIT_FRONTEND}s. Check logs/frontend.log${NC}"
-        echo -e "${RED}Last 10 lines of frontend log:${NC}"
-        tail -10 logs/frontend.log 2>/dev/null || echo "No log file found"
-        kill $BACKEND_PID 2>/dev/null
-        kill $FRONTEND_PID 2>/dev/null
+    echo -e "  PID: $FRONTEND_PID  |  Log: logs/frontend.log"
+
+    if ! wait_for_url "frontend" "$FRONTEND_PID" \
+            "http://localhost:$FRONTEND_PORT" \
+            "logs/frontend.log" 120; then
+        kill "$BACKEND_PID" 2>/dev/null
+        kill "$FRONTEND_PID" 2>/dev/null
         exit 1
     fi
-    
-    echo -e "${GREEN}✓ Frontend ready on http://localhost:$FRONTEND_PORT${NC}"
-else
-    echo -e "${YELLOW}Frontend skipped (mode: $MODE)${NC}"
-fi
 
-echo ""
-echo -e "${GREEN}============================================================${NC}"
-echo -e "${GREEN}       🎉 RAGenie is running!${NC}"
-echo -e "${GREEN}============================================================${NC}"
-echo ""
-
-if [ "$MODE" != "mcp_server" ]; then
-    echo -e "  ${BLUE}Frontend:${NC}  http://localhost:$FRONTEND_PORT"
-fi
-echo -e "  ${BLUE}Backend:${NC}   http://$BACKEND_HOST:$BACKEND_PORT"
-echo -e "  ${BLUE}API Docs:${NC}  http://$BACKEND_HOST:$BACKEND_PORT/docs"
-echo ""
-
-if [ "$MODE" = "hybrid" ]; then
-    echo -e "  ${BLUE}MCP Server:${NC} SSE transport available"
-fi
-
-echo ""
-echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}"
-echo ""
-echo -e "${BLUE}Logs:${NC}"
-echo -e "  Backend:  logs/server.log"
-if [ "$MODE" != "mcp_server" ]; then
-    echo -e "  Frontend: logs/frontend.log"
-fi
-echo -e "  Dependencies: logs/pip_install.log"
-echo ""
-
-# Function to show live logs on demand
-show_logs() {
-    echo -e "${BLUE}Recent backend logs:${NC}"
-    tail -5 logs/server.log 2>/dev/null || echo "No backend logs available"
+    echo -e "${GREEN}✓ Frontend →  http://localhost:$FRONTEND_PORT${NC}"
     echo ""
-    if [ "$MODE" != "mcp_server" ]; then
-        echo -e "${BLUE}Recent frontend logs:${NC}"
-        tail -5 logs/frontend.log 2>/dev/null || echo "No frontend logs available"
-    fi
-}
+fi
 
-# Wait for both processes (or just backend if frontend is not running)
-if [ "$MODE" != "mcp_server" ] && [ ! -z "$FRONTEND_PID" ]; then
-    wait $BACKEND_PID $FRONTEND_PID
+# ── All up ────────────────────────────────────────────────────────────────────
+echo -e "${GREEN}============================================================${NC}"
+echo -e "${GREEN}         🚀 RAGenie is running!${NC}"
+echo -e "${GREEN}============================================================${NC}"
+echo ""
+echo -e "  ${YELLOW}Press Ctrl+C to stop all services${NC}"
+echo ""
+
+# ── Keep alive ────────────────────────────────────────────────────────────────
+if [ "$MODE" != "mcp_server" ] && [ -n "$FRONTEND_PID" ]; then
+    wait "$BACKEND_PID" "$FRONTEND_PID"
 else
-    wait $BACKEND_PID
+    wait "$BACKEND_PID"
 fi

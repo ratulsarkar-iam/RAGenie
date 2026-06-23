@@ -49,9 +49,11 @@ llm:
     
     main:
       provider: "ollama"
-      model_name: "gemma4:e2b-it-q4_K_M"
+      # model_name: "gemma4:e2b-it-q4_K_M"
+      # base_url: "http://localhost:11434"
+      model_name: "gemma4:31b-cloud"
       base_url: "http://localhost:11434"
-      max_tokens: 512
+      max_tokens: 1024 #512
       temperature: 0.7
       top_p: 0.9
       top_k: 50
@@ -165,11 +167,11 @@ tasks:
   require_confirmation: true
   task_clients:
     - name: "calendar"
-      enabled: false
+      enabled: true
       command: "python"
       args: ["mcp_clients/mcp_calendar_macos.py"]
     - name: "reminders"
-      enabled: false
+      enabled: true
       command: "python"
       args: ["mcp_clients/mcp_reminders_macos.py"]
 
