@@ -19,6 +19,10 @@ venv/
 secrets.yaml
 secrets.yml
 
+# ── Configuration files (may contain sensitive settings) ─────────────────────
+config/config.yaml
+config/config.yml
+
 # ── SQLite / Database files ───────────────────────────────────────────────────
 # Never commit any database — they contain user data, auth tokens, and secrets
 *.db
@@ -36,6 +40,8 @@ data/mcp_client/         # MCP server configs (may contain credentials)
 data/memory/             # persistent memory store
 data/news/               # news articles cache
 data/notes/              # proactive notes
+data/activity/           # user activity logs
+data/voice/              # voice assistant data
 data/conversations.db    # (also matched by *.db above)
 static/analytics/        # generated Plotly chart files
 data/
@@ -45,6 +51,8 @@ data/analytics/uploads/DSA_Math_Formulas.xlsx
 data/analytics/uploads/New policy maa.pdf
 data/analytics/uploads/Untitled spreadsheet.xlsx
 data/auth/users.db
+data/activity/activity.db
+data/voice/commands.db
 data/documents/Manas Sarkar.pdf
 data/index/page_index.json
 data/mcp_client/servers.db
@@ -99,3 +107,5 @@ src/llm/prompts_RATUL.py
 *.tmp
 *.swp
 *.orig
+*.pid
+/tmp/.ragenie.pid

@@ -6,11 +6,14 @@ import PersonalAssistant from './components/PersonalAssistant'
 import NewsPage from './components/NewsPage'
 import DatabasePage from './components/DatabasePage'
 import MCPServersPage from './components/MCPServersPage'
+import ActivityPage from './components/ActivityPage'
 import Sidebar from './components/Sidebar'
 import GenieLogo from './components/GenieLogo'
 import SplashScreen from './components/SplashScreen'
-import { Sparkles, Moon, Sun, MessageSquare, BarChart3, X, Info, ExternalLink, Brain, Newspaper, DatabaseZap, Plug } from 'lucide-react'
+import LoginPage from './components/auth/LoginPage'
+import { Sparkles, Moon, Sun, MessageSquare, BarChart3, X, Info, ExternalLink, Brain, Newspaper, DatabaseZap, Plug, Activity as ActivityIcon, LogOut, Loader2 } from 'lucide-react'
 import { useTheme } from './contexts/ThemeContext'
+import { useAuth } from './contexts/AuthContext'
 // @ts-ignore - will be installed
 import ReactMarkdown from 'react-markdown'
 
@@ -20,10 +23,11 @@ function App() {
   })
   const [conversationId] = useState('default')
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
-  const [activeView, setActiveView] = useState<'chat' | 'analytics' | 'about' | 'assistant' | 'news' | 'database' | 'mcp'>('chat')
+  const [activeView, setActiveView] = useState<'chat' | 'analytics' | 'about' | 'assistant' | 'news' | 'database' | 'mcp' | 'activity'>('chat')
   const [refreshDocuments, setRefreshDocuments] = useState(0)
   const [summary, setSummary] = useState<any>(null)
   const { theme, toggleTheme } = useTheme()
+  const { isAuthenticated, isLoading, user, logout } = useAuth()
 
   const handleSplashComplete = useCallback(() => {
     sessionStorage.setItem('ragenie-splash-shown', 'true')
@@ -37,6 +41,20 @@ function App() {
 
   const handleSummaryOpen = (summaryData: any) => {
     setSummary(summaryData)
+  }
+
+  if (isLoading) {
+    return (
+      <div className={`min-h-screen w-full flex items-center justify-center ${
+        theme === 'dark' ? 'bg-slate-900' : 'bg-gray-50'
+      }`}>
+        <Loader2 className={`w-8 h-8 animate-spin ${theme === 'dark' ? 'text-blue-400' : 'text-blue-500'}`} />
+      </div>
+    )
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage />
   }
 
   return (
@@ -201,6 +219,21 @@ function App() {
                   <Brain className="w-4 h-4" />
                   Assistant
                 </button>
+                <button
+                  onClick={() => setActiveView('activity')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                    activeView === 'activity'
+                      ? theme === 'dark'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-blue-500 text-white'
+                      : theme === 'dark'
+                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                      : 'bg-gray-100 hover:bg-gray-200 text-slate-700'
+                  }`}
+                >
+                  <ActivityIcon className="w-4 h-4" />
+                  Activity
+                </button>
               </div>
               <div className="flex gap-2">
                 <a
@@ -236,6 +269,28 @@ function App() {
               }`}>
                 Powered by Ollama
               </span>
+              {user && (
+                <div className={`flex items-center gap-2 pl-3 border-l ${
+                  theme === 'dark' ? 'border-slate-700' : 'border-gray-300'
+                }`}>
+                  <span className={`text-xs font-medium truncate max-w-[140px] ${
+                    theme === 'dark' ? 'text-slate-300' : 'text-slate-600'
+                  }`} title={user.email}>
+                    {user.email}
+                  </span>
+                  <button
+                    onClick={logout}
+                    className={`p-2 rounded-lg transition-all ${
+                      theme === 'dark'
+                        ? 'bg-slate-800 hover:bg-red-500/20 text-slate-300 hover:text-red-400'
+                        : 'bg-gray-100 hover:bg-red-50 text-slate-700 hover:text-red-600'
+                    }`}
+                    title="Log out"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </header>
@@ -247,6 +302,7 @@ function App() {
         <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'news'       ? '' : 'hidden'}`}><NewsPage /></div>
         <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'database'   ? '' : 'hidden'}`}><DatabasePage /></div>
         <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'mcp'        ? '' : 'hidden'}`}><MCPServersPage /></div>
+        <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'activity'   ? '' : 'hidden'}`}><ActivityPage /></div>
         <div className={`flex-1 min-w-0 overflow-hidden flex flex-col ${activeView === 'about'      ? '' : 'hidden'}`}><About /></div>
       </div>
 

@@ -9,11 +9,13 @@ import time
 from typing import Dict, List
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from langchain.agents import AgentExecutor, create_react_agent
 from langchain.prompts import PromptTemplate
 from langchain.tools import Tool
 
+from ..auth.dependencies import require_auth
+from ..auth.models import User
 from ..core.logging_config import get_logger
 from ..mcp_client import (
     ImportRequest,
@@ -63,15 +65,32 @@ _SSRF_BLOCKED_SCHEMES: set = {"file", "ftp", "gopher", "dict"}
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/mcp-servers", tags=["mcp-client"])
+router = APIRouter(
+    prefix="/mcp-servers",
+    tags=["mcp-client"],
+)
 
 
-def _get_manager() -> MCPClientManager:
+async def _get_manager(user_id: str) -> MCPClientManager:
     from .app import app_state
-    mgr = app_state.get("mcp_client_manager")
-    if mgr is None:
+    registry = app_state.get("mcp_manager_registry")
+    if registry is None:
         raise HTTPException(status_code=503, detail="MCP client manager not initialised")
-    return mgr
+    return await registry.get_or_create(user_id)
+
+
+def _log_activity(user_id: str, event_type: str, description: str, metadata: dict = None) -> None:
+    from .app import app_state
+    activity_logger = app_state.get("activity_logger")
+    if activity_logger:
+        activity_logger.log(user_id, event_type, description, metadata)
+
+
+def _owned_or_404(store: "ServerConfigStore", server_id: str, user_id: str) -> "ServerConfig":
+    config = store.get(server_id)
+    if config is None or config.user_id != user_id:
+        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+    return config
 
 
 def _validate_url_for_ssrf(url: str) -> None:
@@ -125,9 +144,9 @@ def _get_store() -> ServerConfigStore:
 # ── Static routes FIRST (before /{id}) ──────────────────────────────────────
 
 @router.get("", response_model=List[ServerWithStatus])
-async def list_servers():
+async def list_servers(current_user: User = Depends(require_auth)):
     """List all configured servers with current status and tool counts."""
-    mgr = _get_manager()
+    mgr = await _get_manager(current_user.id)
     results = mgr.list_servers_with_status()
     for item in results:
         item.config.env = None
@@ -136,10 +155,10 @@ async def list_servers():
 
 
 @router.post("", response_model=ServerWithStatus, status_code=201)
-async def create_server(body: ServerCreateRequest):
+async def create_server(body: ServerCreateRequest, current_user: User = Depends(require_auth)):
     """Create a new MCP server config and optionally connect."""
     store = _get_store()
-    mgr = _get_manager()
+    mgr = await _get_manager(current_user.id)
 
     if body.transport == "stdio" and not body.command:
         raise HTTPException(status_code=400, detail="command is required for stdio transport")
@@ -161,7 +180,7 @@ async def create_server(body: ServerCreateRequest):
             url=body.url,
             headers=body.headers,
         )
-        config = store.create(create_data)
+        config = store.create(current_user.id, create_data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -170,6 +189,8 @@ async def create_server(body: ServerCreateRequest):
             await mgr.connect_server(config)
         except MCPConnectionError as e:
             logger.warning(f"Auto-connect failed for '{config.name}': {e}")
+
+    _log_activity(current_user.id, "mcp_server_created", f"Created MCP server '{config.name}'", {"server_id": config.id})
 
     status = mgr.get_server_status(config.id) or ServerStatus(
         server_id=config.id, status=ConnectionStatus.DISCONNECTED
@@ -183,10 +204,10 @@ async def create_server(body: ServerCreateRequest):
 
 
 @router.post("/import", response_model=ImportResult)
-async def import_servers(body: ImportRequest):
+async def import_servers(body: ImportRequest, current_user: User = Depends(require_auth)):
     """Import MCP server configs from Claude Desktop JSON format."""
     store = _get_store()
-    mgr = _get_manager()
+    mgr = await _get_manager(current_user.id)
     created = updated = skipped = 0
 
     for name, entry in body.mcpServers.items():
@@ -199,7 +220,7 @@ async def import_servers(body: ImportRequest):
         if env == {}:
             env = None
 
-        existing = store.get_by_name(name)
+        existing = store.get_by_name(current_user.id, name)
         try:
             if existing:
                 from ..mcp_client.models import ServerConfigPatch
@@ -223,7 +244,7 @@ async def import_servers(body: ImportRequest):
                     env=env,
                     url=url,
                 )
-                config = store.create(create_data)
+                config = store.create(current_user.id, create_data)
                 created += 1
                 if body.connect_now and config.enabled:
                     try:
@@ -238,12 +259,12 @@ async def import_servers(body: ImportRequest):
 
 
 @router.get("/export")
-async def export_servers():
+async def export_servers(current_user: User = Depends(require_auth)):
     """Export all server configs in Claude Desktop JSON format.
     NOTE: env vars are redacted — they contain credentials."""
     store = _get_store()
     mcp_servers = {}
-    for config in store.list():
+    for config in store.list(current_user.id):
         entry: dict = {}
         if config.transport == "stdio":
             entry["command"] = config.command or ""
@@ -318,11 +339,11 @@ Thought:{agent_scratchpad}"""
 
 
 @router.post("/chat", response_model=MCPChatResponse)
-async def mcp_agent_chat(body: MCPChatRequest):
+async def mcp_agent_chat(body: MCPChatRequest, current_user: User = Depends(require_auth)):
     """Run an agent-mode chat using selected (or all) connected MCP tools."""
     from .app import app_state
 
-    mgr = _get_manager()
+    mgr = await _get_manager(current_user.id)
     orchestrator = app_state.get("orchestrator")
     if orchestrator is None:
         raise HTTPException(status_code=503, detail="Orchestrator not initialised")
@@ -483,8 +504,8 @@ async def mcp_agent_chat(body: MCPChatRequest):
     try:
         result = await executor.ainvoke({"input": full_input})
     except Exception as e:
-        logger.error(f"MCP agent chat error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("MCP agent chat error", exc_info=True)
+        raise HTTPException(status_code=500, detail="MCP agent encountered an internal error.")
 
     # If the agent refused without calling any tools, retry once with an explicit override
     if not result.get("intermediate_steps") and _is_refusal(result.get("output", "")):
@@ -580,18 +601,22 @@ async def clear_mcp_chat_history(conversation_id: str):
 # ── Session metadata endpoint ───────────────────────────────────────────────
 
 @router.get("/session-meta/{server_id}")
-async def get_session_meta(server_id: str):
+async def get_session_meta(server_id: str, current_user: User = Depends(require_auth)):
     """Return the in-memory session state for a server (e.g. logged_in status)."""
-    mgr = _get_manager()
+    store = _get_store()
+    _owned_or_404(store, server_id, current_user.id)
+    mgr = await _get_manager(current_user.id)
     return mgr.get_session_meta(server_id)
 
 
 @router.post("/session-meta/{server_id}", status_code=204)
-async def set_session_meta(server_id: str, body: dict):
+async def set_session_meta(server_id: str, body: dict, current_user: User = Depends(require_auth)):
     """Manually set session metadata keys for a server.
     Only whitelisted keys are accepted to prevent data injection."""
     _ALLOWED_SESSION_KEYS = {"logged_in", "logged_in_at", "note"}
-    mgr = _get_manager()
+    store = _get_store()
+    _owned_or_404(store, server_id, current_user.id)
+    mgr = await _get_manager(current_user.id)
     for key, value in body.items():
         if key not in _ALLOWED_SESSION_KEYS:
             raise HTTPException(status_code=400, detail=f"Session key '{key}' is not permitted")
@@ -625,27 +650,27 @@ async def get_path_suggestions():
 # ── Built-in server seeds ────────────────────────────────────────────────────
 
 @router.post("/seed-news", response_model=ServerWithStatus, status_code=201)
-async def seed_news_server(connect_now: bool = True):
+async def seed_news_server(connect_now: bool = True, current_user: User = Depends(require_auth)):
     """Register the built-in RAGenie News MCP server (stdio) and optionally connect it.
 
     The news server exposes tools: list_news_keywords, create_news_keyword,
     update_news_keyword, delete_news_keyword, fetch_news_now, get_news_articles,
     suggest_news_keyword.
 
-    Idempotent — returns the existing server if already registered.
+    Idempotent — returns the existing server if already registered (for this user).
     """
     import sys
     from pathlib import Path
 
     store = _get_store()
-    mgr = _get_manager()
+    mgr = await _get_manager(current_user.id)
 
-    existing = store.get_by_name("RAGenie News")
+    existing = store.get_by_name(current_user.id, "RAGenie News")
     if existing:
         status = mgr.get_server_status(existing.id) or ServerStatus(
             server_id=existing.id, status=ConnectionStatus.DISCONNECTED
         )
-        tools = mgr.get_tools_for_server(existing.id)
+        tools = mgr._connections[existing.id].get_tools() if existing.id in mgr._connections else []
         return ServerWithStatus(config=existing, status=status, tools=tools)
 
     # Path to the news server script (same repo)
@@ -663,30 +688,28 @@ async def seed_news_server(connect_now: bool = True):
         env={},
     )
 
-    config = store.create(req)
+    config = store.create(current_user.id, req)
     if connect_now:
         try:
-            await mgr.connect_server(config.id)
+            await mgr.connect_server(config)
         except Exception as e:
             logger.warning(f"News MCP server connect failed: {e}")
 
     status = mgr.get_server_status(config.id) or ServerStatus(
         server_id=config.id, status=ConnectionStatus.DISCONNECTED
     )
-    tools = mgr.get_tools_for_server(config.id)
+    tools = mgr._connections[config.id].get_tools() if config.id in mgr._connections else []
     return ServerWithStatus(config=config, status=status, tools=tools)
 
 
 # ── Parameterised routes /{id} ───────────────────────────────────────────────
 
 @router.get("/{server_id}", response_model=ServerWithStatus)
-async def get_server(server_id: str):
+async def get_server(server_id: str, current_user: User = Depends(require_auth)):
     """Get server details and tools. Env/headers are redacted."""
     store = _get_store()
-    mgr = _get_manager()
-    config = store.get(server_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+    mgr = await _get_manager(current_user.id)
+    config = _owned_or_404(store, server_id, current_user.id)
     status = mgr.get_server_status(server_id) or ServerStatus(
         server_id=server_id, status=ConnectionStatus.DISCONNECTED
     )
@@ -697,15 +720,14 @@ async def get_server(server_id: str):
 
 
 @router.patch("/{server_id}", response_model=ServerWithStatus)
-async def update_server(server_id: str, patch: ServerConfigPatch):
+async def update_server(server_id: str, patch: ServerConfigPatch, current_user: User = Depends(require_auth)):
     """Update server config. Reconnects if currently connected."""
     store = _get_store()
-    mgr = _get_manager()
-    if store.get(server_id) is None:
-        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+    mgr = await _get_manager(current_user.id)
+    _owned_or_404(store, server_id, current_user.id)
 
     if patch.name is not None:
-        existing_name = store.get_by_name(patch.name)
+        existing_name = store.get_by_name(current_user.id, patch.name)
         if existing_name and existing_name.id != server_id:
             raise HTTPException(status_code=400, detail="name already exists")
 
@@ -729,6 +751,8 @@ async def update_server(server_id: str, patch: ServerConfigPatch):
         except MCPConnectionError as e:
             logger.warning(f"Auto-connect after update failed: {e}")
 
+    _log_activity(current_user.id, "mcp_server_updated", f"Updated MCP server '{config.name}'", {"server_id": server_id})
+
     status = mgr.get_server_status(server_id) or ServerStatus(
         server_id=server_id, status=ConnectionStatus.DISCONNECTED
     )
@@ -737,52 +761,49 @@ async def update_server(server_id: str, patch: ServerConfigPatch):
 
 
 @router.delete("/{server_id}", status_code=204)
-async def delete_server(server_id: str):
+async def delete_server(server_id: str, current_user: User = Depends(require_auth)):
     """Delete a server config and disconnect if connected."""
     store = _get_store()
-    mgr = _get_manager()
-    if store.get(server_id) is None:
-        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+    mgr = await _get_manager(current_user.id)
+    config = _owned_or_404(store, server_id, current_user.id)
     await mgr.disconnect_server(server_id)
     store.delete(server_id)
+    _log_activity(current_user.id, "mcp_server_deleted", f"Deleted MCP server '{config.name}'", {"server_id": server_id})
 
 
 @router.post("/{server_id}/connect", response_model=ServerStatus)
-async def connect_server(server_id: str):
+async def connect_server(server_id: str, current_user: User = Depends(require_auth)):
     """Connect (or reconnect) a server."""
     store = _get_store()
-    mgr = _get_manager()
-    config = store.get(server_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+    mgr = await _get_manager(current_user.id)
+    config = _owned_or_404(store, server_id, current_user.id)
     try:
         await mgr.connect_server(config)
     except MCPConnectionError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    _log_activity(current_user.id, "mcp_server_connected", f"Connected MCP server '{config.name}'", {"server_id": server_id})
     return mgr.get_server_status(server_id)
 
 
 @router.post("/{server_id}/disconnect", response_model=ServerStatus)
-async def disconnect_server(server_id: str):
+async def disconnect_server(server_id: str, current_user: User = Depends(require_auth)):
     """Disconnect a server without deleting its config."""
     store = _get_store()
-    mgr = _get_manager()
-    if store.get(server_id) is None:
-        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+    mgr = await _get_manager(current_user.id)
+    config = _owned_or_404(store, server_id, current_user.id)
     await mgr.disconnect_server(server_id)
+    _log_activity(current_user.id, "mcp_server_disconnected", f"Disconnected MCP server '{config.name}'", {"server_id": server_id})
     return ServerStatus(server_id=server_id, status=ConnectionStatus.DISCONNECTED)
 
 
 @router.post("/{server_id}/login")
-async def server_login(server_id: str):
+async def server_login(server_id: str, current_user: User = Depends(require_auth)):
     """Directly invoke the login tool for a connected server (bypasses the LLM agent).
     Returns the login URL or instruction from the tool."""
     from datetime import datetime, timezone as _tz
     store = _get_store()
-    mgr = _get_manager()
-    config = store.get(server_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+    mgr = await _get_manager(current_user.id)
+    config = _owned_or_404(store, server_id, current_user.id)
     if server_id not in mgr._connections:
         raise HTTPException(status_code=409, detail="Server is not connected")
 
@@ -834,24 +855,21 @@ async def server_login(server_id: str):
 
 
 @router.get("/{server_id}/tools", response_model=List[ToolDefinition])
-async def list_server_tools(server_id: str):
+async def list_server_tools(server_id: str, current_user: User = Depends(require_auth)):
     """List the cached tools for a connected server."""
     store = _get_store()
-    mgr = _get_manager()
-    if store.get(server_id) is None:
-        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+    mgr = await _get_manager(current_user.id)
+    _owned_or_404(store, server_id, current_user.id)
     if server_id not in mgr._connections:
         raise HTTPException(status_code=409, detail="Server is not connected")
     return mgr._connections[server_id].get_tools()
 
 
 @router.post("/{server_id}/test", response_model=TestResult)
-async def test_server(server_id: str):
+async def test_server(server_id: str, current_user: User = Depends(require_auth)):
     """Perform an ephemeral connect → list tools → disconnect test."""
     store = _get_store()
-    config = store.get(server_id)
-    if config is None:
-        raise HTTPException(status_code=404, detail=f"Server not found: {server_id}")
+    config = _owned_or_404(store, server_id, current_user.id)
 
     start = time.monotonic()
     probe = MCPClientConnection(config)

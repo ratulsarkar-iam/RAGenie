@@ -2,7 +2,7 @@
 import time
 import asyncio
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -32,20 +32,31 @@ def _client_ip(request: Request) -> str:
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Sliding-window rate limiter. No Redis required."""
+    """Sliding-window rate limiter. No Redis required.
 
-    def __init__(self, app, enabled: bool = True):
+    Pass a ``config`` (``RateLimitConfig``) to apply values from
+    ``config.yaml`` instead of the hardcoded defaults.
+    """
+
+    def __init__(self, app, enabled: bool = True, config: Optional[object] = None):
         super().__init__(app)
         self.enabled = enabled
         self._windows: Dict[str, List[float]] = defaultdict(list)
         self._lock = asyncio.Lock()
+        if config is not None:
+            self._tiers: Dict[str, Tuple[int, int]] = {
+                "upload":  (config.upload_rph, 3600),
+                "default": (config.default_rpm, 60),
+            }
+        else:
+            self._tiers = _TIERS
 
     async def dispatch(self, request: Request, call_next):
         if not self.enabled or request.url.path in _SKIP_PATHS:
             return await call_next(request)
 
         tier = _classify(request.url.path)
-        max_req, window_sec = _TIERS[tier]
+        max_req, window_sec = self._tiers[tier]
         ip = _client_ip(request)
         key = f"{ip}:{tier}"
         now = time.monotonic()

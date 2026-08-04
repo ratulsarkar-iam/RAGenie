@@ -3,7 +3,7 @@ import hashlib
 import secrets
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -40,6 +40,18 @@ class UserStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"
             )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                    token       TEXT PRIMARY KEY,
+                    user_id     TEXT NOT NULL,
+                    expires_at  TEXT NOT NULL,
+                    used        INTEGER NOT NULL DEFAULT 0,
+                    created_at  TEXT NOT NULL
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON password_reset_tokens(user_id)"
+            )
             conn.commit()
 
     # ── Password helpers ─────────────────────────────────────────────────────
@@ -66,7 +78,7 @@ class UserStore:
     def create_user(self, email: str, password: str, role: str = "user") -> User:
         user_id = str(uuid.uuid4())
         hashed = self.hash_password(password)
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT INTO users (id, email, hashed_password, role, is_active, created_at) "
@@ -120,3 +132,49 @@ class UserStore:
     def count_users(self) -> int:
         with sqlite3.connect(self.db_path) as conn:
             return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+    # ── Password reset tokens ────────────────────────────────────────────────
+
+    def create_reset_token(self, user_id: str, expire_minutes: int = 30) -> str:
+        """Create a one-time password reset token, invalidating any previous
+        unused tokens for this user."""
+        from datetime import timedelta
+
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        expires_at = (now + timedelta(minutes=expire_minutes)).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE password_reset_tokens SET used = 1 WHERE user_id = ? AND used = 0",
+                (user_id,),
+            )
+            conn.execute(
+                "INSERT INTO password_reset_tokens (token, user_id, expires_at, used, created_at) "
+                "VALUES (?, ?, ?, 0, ?)",
+                (token, user_id, expires_at, now.isoformat()),
+            )
+            conn.commit()
+        return token
+
+    def get_valid_reset_token(self, token: str) -> Optional[dict]:
+        """Return the token row if it exists, is unused, and hasn't expired."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM password_reset_tokens WHERE token = ?", (token,)
+            ).fetchone()
+        if not row:
+            return None
+        row = dict(row)
+        if row["used"]:
+            return None
+        if datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
+            return None
+        return row
+
+    def consume_reset_token(self, token: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE password_reset_tokens SET used = 1 WHERE token = ?", (token,)
+            )
+            conn.commit()

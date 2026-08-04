@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { authHeader, notifyAuthExpired } from './authToken'
 
 const API_BASE_URL = '/api'
 
@@ -8,6 +9,19 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 })
+
+api.interceptors.request.use(config => {
+  Object.assign(config.headers, authHeader())
+  return config
+})
+
+api.interceptors.response.use(
+  response => response,
+  error => {
+    if (error?.response?.status === 401) notifyAuthExpired()
+    return Promise.reject(error)
+  }
+)
 
 export interface ChatRequest {
   message: string

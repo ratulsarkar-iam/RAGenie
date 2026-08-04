@@ -152,11 +152,71 @@ class MCPClientConfig(BaseModel):
     store_path: str = Field(default="data/mcp_client/servers.db")
 
 
-class AuthConfig(BaseModel):
+class VoiceWakeWordConfig(BaseModel):
+    phrase: str = Field(default="hey_jarvis")
+    model_path: Optional[str] = Field(default=None)
+    threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class VoiceSTTConfig(BaseModel):
+    engine: str = Field(default="faster-whisper")
+    model_size: str = Field(default="base")
+    language: str = Field(default="en")
+    device: str = Field(default="cpu")
+    compute_type: str = Field(default="int8")
+
+
+class VoiceTTSConfig(BaseModel):
+    engine: str = Field(default="edge-tts")
+    voice: str = Field(default="en-US-JennyNeural")
+    rate: str = Field(default="+0%")
+    fallback_engine: str = Field(default="pyttsx3")
+
+
+class VoiceConfig(BaseModel):
     enabled: bool = Field(default=False)
+    wake_word: VoiceWakeWordConfig = Field(default_factory=VoiceWakeWordConfig)
+    stt: VoiceSTTConfig = Field(default_factory=VoiceSTTConfig)
+    tts: VoiceTTSConfig = Field(default_factory=VoiceTTSConfig)
+    vad_silence_ms: int = Field(default=800, ge=200, le=3000)
+    barge_in_threshold: float = Field(default=0.015, ge=0.0, le=1.0)
+    llm_model: str = Field(default="llama3.2")
+    use_agent: bool = Field(default=True)
+    conversation_id_prefix: str = Field(default="voice")
+    # The voice assistant acts as the personal assistant of whichever user is
+    # currently logged into the web UI (see src/auth/session_bridge.py) — it
+    # does not have its own separate account. If nobody is logged in, it
+    # refuses to act and asks the user to log in.
+    command_history_days: int = Field(default=3, ge=1, le=90)
+    command_history_db: str = Field(default="data/voice/commands.db")
+
+
+class AuthConfig(BaseModel):
+    enabled: bool = Field(default=True)
     db_path: str = Field(default="data/auth/users.db")
     access_token_expire_minutes: int = Field(default=30, ge=1)
     refresh_token_expire_days: int = Field(default=7, ge=1)
+
+
+class ActivityConfig(BaseModel):
+    enabled: bool = Field(default=True)
+    store_path: str = Field(default="data/activity/activity.db")
+
+
+class EmailConfig(BaseModel):
+    """SMTP email delivery (password reset, etc.). Credentials come from env vars —
+    never hardcode them in config.yaml. When smtp_host is unset, emails are logged
+    instead of sent (dev-friendly fallback)."""
+    enabled: bool = Field(default=False)
+    smtp_host: Optional[str] = Field(default=None)
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: Optional[str] = Field(default=None)  # env: RAGENIE_SMTP_USERNAME
+    smtp_password_env: str = Field(default="RAGENIE_SMTP_PASSWORD")
+    use_tls: bool = Field(default=True)
+    from_address: str = Field(default="no-reply@ragenie.local")
+    from_name: str = Field(default="RAGenie")
+    frontend_base_url: str = Field(default="http://localhost:3000")
+    reset_token_expire_minutes: int = Field(default=30, ge=1)
 
 
 class RateLimitConfig(BaseModel):
@@ -193,6 +253,9 @@ class Config(BaseModel):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)
     mcp_client: MCPClientConfig = Field(default_factory=MCPClientConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    activity: ActivityConfig = Field(default_factory=ActivityConfig)
+    email: EmailConfig = Field(default_factory=EmailConfig)
 
     @validator("mcp_server")
     def validate_mcp_server_mode(cls, v, values):

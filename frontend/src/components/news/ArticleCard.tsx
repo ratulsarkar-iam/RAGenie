@@ -145,6 +145,14 @@ export default function ArticleCard({ article, onDeleted, onUpdated, onOpenDetai
       )}
       {/* Title row */}
       <div className="flex items-start gap-2">
+        {article.image_url && (
+          <img
+            src={article.image_url}
+            alt=""
+            className="w-16 h-14 object-cover rounded-lg flex-shrink-0 mt-0.5"
+            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+          />
+        )}
         <div className="flex-1 min-w-0">
           <button
             onClick={() => onOpenDetail?.(article)}

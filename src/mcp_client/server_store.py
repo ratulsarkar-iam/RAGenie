@@ -11,6 +11,8 @@ from ..core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+_UNOWNED = "__unowned__"  # sentinel user_id for legacy rows pending migration
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -20,6 +22,7 @@ def _row_to_config(row: sqlite3.Row) -> ServerConfig:
     keys = row.keys()
     return ServerConfig(
         id=row["id"],
+        user_id=row["user_id"] if "user_id" in keys else "",
         name=row["name"],
         transport=row["transport"],
         enabled=bool(row["enabled"]),
@@ -34,7 +37,7 @@ def _row_to_config(row: sqlite3.Row) -> ServerConfig:
 
 
 class ServerConfigStore:
-    """CRUD store for MCP server configs, backed by SQLite."""
+    """CRUD store for MCP server configs, backed by SQLite — scoped per user_id."""
 
     def __init__(self, db_path: str = "data/mcp_client/servers.db"):
         self.db_path = db_path
@@ -46,7 +49,8 @@ class ServerConfigStore:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS mcp_servers (
                     id          TEXT PRIMARY KEY,
-                    name        TEXT NOT NULL UNIQUE,
+                    user_id     TEXT NOT NULL DEFAULT '__unowned__',
+                    name        TEXT NOT NULL,
                     transport   TEXT NOT NULL CHECK(transport IN ('stdio', 'sse', 'http')),
                     enabled     INTEGER NOT NULL DEFAULT 1,
                     command     TEXT,
@@ -61,11 +65,15 @@ class ServerConfigStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_mcp_servers_name ON mcp_servers(name)"
             )
-            # Add headers column to existing DBs that predate this field
-            try:
+            # Add columns to existing DBs that predate these fields
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(mcp_servers)").fetchall()}
+            if "headers" not in existing_cols:
                 conn.execute("ALTER TABLE mcp_servers ADD COLUMN headers TEXT")
-            except Exception:
-                pass
+            if "user_id" not in existing_cols:
+                conn.execute(f"ALTER TABLE mcp_servers ADD COLUMN user_id TEXT NOT NULL DEFAULT '{_UNOWNED}'")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mcp_servers_user ON mcp_servers(user_id)"
+            )
             conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
@@ -73,17 +81,17 @@ class ServerConfigStore:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def create(self, data: ServerConfigCreate) -> ServerConfig:
-        if self.get_by_name(data.name):
+    def create(self, user_id: str, data: ServerConfigCreate) -> ServerConfig:
+        if self.get_by_name(user_id, data.name):
             raise ValueError(f"name already exists: '{data.name}'")
         server_id = str(uuid.uuid4())
         now = _now()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO mcp_servers (id,name,transport,enabled,command,args,env,url,headers,created_at,updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO mcp_servers (id,user_id,name,transport,enabled,command,args,env,url,headers,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
-                    server_id, data.name, data.transport, int(data.enabled),
+                    server_id, user_id, data.name, data.transport, int(data.enabled),
                     data.command,
                     json.dumps(data.args) if data.args is not None else None,
                     json.dumps(data.env) if data.env is not None else None,
@@ -96,23 +104,24 @@ class ServerConfigStore:
         return self.get(server_id)  # type: ignore[return-value]
 
     def get(self, server_id: str) -> Optional[ServerConfig]:
+        """Returns the server regardless of owner — callers must check `user_id` themselves."""
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM mcp_servers WHERE id = ?", (server_id,)
             ).fetchone()
         return _row_to_config(row) if row else None
 
-    def get_by_name(self, name: str) -> Optional[ServerConfig]:
+    def get_by_name(self, user_id: str, name: str) -> Optional[ServerConfig]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM mcp_servers WHERE name = ?", (name,)
+                "SELECT * FROM mcp_servers WHERE user_id = ? AND name = ?", (user_id, name)
             ).fetchone()
         return _row_to_config(row) if row else None
 
-    def list(self) -> List[ServerConfig]:
+    def list(self, user_id: str) -> List[ServerConfig]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM mcp_servers ORDER BY created_at"
+                "SELECT * FROM mcp_servers WHERE user_id = ? ORDER BY created_at", (user_id,)
             ).fetchall()
         return [_row_to_config(r) for r in rows]
 
@@ -122,7 +131,7 @@ class ServerConfigStore:
             raise KeyError(f"Server not found: {server_id}")
 
         if patch.name is not None and patch.name != existing.name:
-            collision = self.get_by_name(patch.name)
+            collision = self.get_by_name(existing.user_id, patch.name)
             if collision and collision.id != server_id:
                 raise ValueError(f"name already exists: '{patch.name}'")
 
@@ -172,6 +181,8 @@ class ServerConfigStore:
     def migrate_from_yaml(self, mcp_clients: list) -> int:
         """
         Insert entries from config.yaml mcp_clients that do not yet exist in the DB.
+        Assigned to the `_UNOWNED` sentinel; call `migrate_unowned_to()` once an
+        admin account exists to assign real ownership.
         Returns the number of newly inserted rows.
         """
         inserted = 0
@@ -179,7 +190,7 @@ class ServerConfigStore:
             name = getattr(entry, "name", None) or entry.get("name", "") if isinstance(entry, dict) else entry.name
             if not name:
                 continue
-            if self.get_by_name(name):
+            if self.get_by_name(_UNOWNED, name):
                 continue
             try:
                 transport = getattr(entry, "transport", None) or (entry.get("transport") if isinstance(entry, dict) else None)
@@ -188,7 +199,7 @@ class ServerConfigStore:
                 env = getattr(entry, "env", None) or (entry.get("env") if isinstance(entry, dict) else None)
                 url = getattr(entry, "url", None) or (entry.get("url") if isinstance(entry, dict) else None)
                 enabled = getattr(entry, "enabled", True)
-                self.create(ServerConfigCreate(
+                self.create(_UNOWNED, ServerConfigCreate(
                     name=name,
                     transport=transport or "stdio",
                     enabled=enabled,
@@ -202,3 +213,13 @@ class ServerConfigStore:
             except Exception as e:
                 logger.warning(f"Could not migrate MCP client '{name}': {e}")
         return inserted
+
+    def migrate_unowned_to(self, user_id: str) -> int:
+        """Backfill legacy rows (created before multi-user support) to the given user_id."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE mcp_servers SET user_id = ? WHERE user_id = ? OR user_id IS NULL",
+                (user_id, _UNOWNED),
+            )
+            conn.commit()
+        return cur.rowcount

@@ -1,3 +1,5 @@
+import { getAccessToken } from './authToken'
+
 export interface WebSocketMessage {
   type: 'user_message' | 'assistant_message' | 'stream_start' | 'stream_token' | 'stream_end' | 'error' | 'reasoning' | 'tool_call' | 'tool_result' | 'tool_error'
   content?: string
@@ -24,7 +26,8 @@ export class ChatWebSocket {
     return new Promise((resolve, reject) => {
       // Use same host - Vite proxy will route /ws to backend
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${protocol}//${window.location.host}/ws/${this.clientId}`
+      const token = getAccessToken()
+      const wsUrl = `${protocol}//${window.location.host}/ws/${this.clientId}${token ? `?token=${encodeURIComponent(token)}` : ''}`
 
       console.log('Connecting to WebSocket:', wsUrl)
       this.ws = new WebSocket(wsUrl)

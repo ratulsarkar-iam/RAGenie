@@ -45,7 +45,7 @@ class NewsService:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        keywords = self._keywords.list_all()
+        keywords = self._keywords.list_all_cross_user()
         self._scheduler.refresh(keywords)
         self._scheduler.start()
 
@@ -65,15 +65,16 @@ class NewsService:
     # Keyword management
     # ------------------------------------------------------------------
 
-    def create_keyword(self, req: KeywordCreate) -> Keyword:
-        kw = self._keywords.create(req)
+    def create_keyword(self, user_id: str, req: KeywordCreate) -> Keyword:
+        kw = self._keywords.create(user_id, req)
         self._scheduler.register_keyword(kw)
         return kw
 
-    def list_keywords(self) -> List[Keyword]:
-        return self._keywords.list_all()
+    def list_keywords(self, user_id: str) -> List[Keyword]:
+        return self._keywords.list_all(user_id)
 
     def get_keyword(self, keyword_id: str) -> Optional[Keyword]:
+        """Returns the keyword regardless of owner — callers must check `user_id` themselves."""
         return self._keywords.get(keyword_id)
 
     def update_keyword(self, keyword_id: str, patch: KeywordUpdate) -> Optional[Keyword]:
@@ -89,8 +90,11 @@ class NewsService:
         self._scheduler.remove_keyword(keyword_id)
         return self._keywords.delete(keyword_id)
 
-    def keyword_exists(self, term: str) -> bool:
-        return self._keywords.term_exists(term)
+    def keyword_exists(self, user_id: str, term: str) -> bool:
+        return self._keywords.term_exists(user_id, term)
+
+    def migrate_unowned_keywords_to(self, user_id: str) -> int:
+        return self._keywords.migrate_unowned_to(user_id)
 
     def suggest_keyword(self, description: str) -> dict:
         return self._summariser.suggest_keyword(description)

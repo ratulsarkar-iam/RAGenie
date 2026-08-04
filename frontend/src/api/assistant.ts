@@ -1,4 +1,13 @@
+import { authHeader } from './authToken'
+
 const BASE = 'http://localhost:8000/api'
+
+function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  return fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), ...authHeader() },
+  })
+}
 
 // ── Memory ────────────────────────────────────────────────────────────────────
 
@@ -15,7 +24,7 @@ export async function storeMemory(
   type = 'context',
   metadata: Record<string, any> = {}
 ): Promise<{ memory_id: string; status: string }> {
-  const res = await fetch(`${BASE}/memory/store`, {
+  const res = await authFetch(`${BASE}/memory/store`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content, type, metadata }),
@@ -28,13 +37,13 @@ export async function searchMemories(
   q: string,
   limit = 10
 ): Promise<{ memories: Memory[]; count: number }> {
-  const res = await fetch(`${BASE}/memory/search?q=${encodeURIComponent(q)}&limit=${limit}`)
+  const res = await authFetch(`${BASE}/memory/search?q=${encodeURIComponent(q)}&limit=${limit}`)
   if (!res.ok) throw new Error(`Search memories failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function getMemoryProfile(): Promise<Record<string, any>> {
-  const res = await fetch(`${BASE}/memory/profile`)
+  const res = await authFetch(`${BASE}/memory/profile`)
   if (!res.ok) throw new Error(`Get profile failed: ${res.statusText}`)
   return res.json()
 }
@@ -49,7 +58,7 @@ export interface TaskResult {
 }
 
 export async function executeTask(request: string): Promise<TaskResult> {
-  const res = await fetch(`${BASE}/tasks/execute`, {
+  const res = await authFetch(`${BASE}/tasks/execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ request }),
@@ -66,7 +75,7 @@ export async function submitFeedback(
   messageId: string,
   comment = ''
 ): Promise<{ status: string; feedback_id: string }> {
-  const res = await fetch(`${BASE}/feedback`, {
+  const res = await authFetch(`${BASE}/feedback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ type, rating, message_id: messageId, comment }),
@@ -86,7 +95,7 @@ export interface LearningSummary {
 }
 
 export async function getLearningSummary(): Promise<LearningSummary> {
-  const res = await fetch(`${BASE}/learning/summary`)
+  const res = await authFetch(`${BASE}/learning/summary`)
   if (!res.ok) throw new Error(`Get learning summary failed: ${res.statusText}`)
   return res.json()
 }
@@ -94,13 +103,13 @@ export async function getLearningSummary(): Promise<LearningSummary> {
 // ── Proactive ─────────────────────────────────────────────────────────────────
 
 export async function triggerBriefing(): Promise<{ status: string }> {
-  const res = await fetch(`${BASE}/proactive/briefing`, { method: 'POST' })
+  const res = await authFetch(`${BASE}/proactive/briefing`, { method: 'POST' })
   if (!res.ok) throw new Error(`Trigger briefing failed: ${res.statusText}`)
   return res.json()
 }
 
 export async function getDueReviews(): Promise<{ due_reviews: any[] }> {
-  const res = await fetch(`${BASE}/proactive/due-reviews`)
+  const res = await authFetch(`${BASE}/proactive/due-reviews`)
   if (!res.ok) throw new Error(`Get due reviews failed: ${res.statusText}`)
   return res.json()
 }

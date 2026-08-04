@@ -1,4 +1,4 @@
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect, Query
 from typing import Any, Dict, List, Optional
 import json
 import asyncio
@@ -85,10 +85,11 @@ class ToolCallStreamingCallback(AsyncCallbackHandler):
         self._current_tool = None
 
 
-async def handle_chat_websocket(websocket: WebSocket, client_id: str, orchestrator):
-    """Handle WebSocket chat connection with streaming."""
+async def handle_chat_websocket(websocket: WebSocket, client_id: str, orchestrator, current_user=None):
+    """Handle WebSocket chat connection with streaming. `current_user` must be pre-validated by the caller."""
     await manager.connect(websocket, client_id)
-    
+    user_id = current_user.id if current_user else None
+
     try:
         while True:
             # Receive message from client
@@ -115,6 +116,7 @@ async def handle_chat_websocket(websocket: WebSocket, client_id: str, orchestrat
             conversation_id = data.get("conversation_id", "default")
             use_agent = data.get("use_agent", False)
             use_reasoning = data.get("use_reasoning", False)
+            model_override_name = data.get("model")  # optional per-request model (e.g. voice)
             
             # Auto-detect reasoning if not explicitly set
             if not use_reasoning and detect_reasoning_needed(message):
@@ -127,21 +129,49 @@ async def handle_chat_websocket(websocket: WebSocket, client_id: str, orchestrat
             if orchestrator.conversation is None or orchestrator.conversation.conversation_id != conversation_id:
                 orchestrator.start_conversation(conversation_id)
             
-            # Add user message
-            orchestrator.conversation.add_message("user", message)
+            # NOTE: user message is added inside achat() / stream_simple_response().
+            # Do NOT add it here to avoid double-insertion in agent mode.
             
             # Send acknowledgment
             await manager.send_message(client_id, {
                 "type": "user_message",
                 "content": message
             })
+
+            if user_id:
+                try:
+                    from .app import app_state
+                    activity_logger = app_state.get("activity_logger")
+                    if activity_logger:
+                        activity_logger.log(
+                            user_id, "chat_message",
+                            f"Sent chat message via WS ({'agent' if use_agent else 'reasoning' if use_reasoning else 'simple'})",
+                            {"conversation_id": conversation_id},
+                        )
+                except Exception:
+                    pass
             
             try:
+                # Build a one-off LLM override when the client requests a specific model
+                llm_override = None
+                if model_override_name:
+                    try:
+                        from langchain_community.llms import Ollama
+                        llm_override = Ollama(
+                            model=model_override_name,
+                            base_url="http://localhost:11434",
+                        )
+                        logger.info(f"Using model override: {model_override_name}")
+                    except Exception as _oe:
+                        logger.warning(f"Could not create model override '{model_override_name}': {_oe}")
+
                 # Generate response with streaming
                 if use_agent:
                     logger.info(f"WebSocket agent mode activated for: {message[:50]}...")
                     tool_callback = ToolCallStreamingCallback(client_id)
-                    response = await orchestrator.achat(message, callbacks=[tool_callback])
+                    response = await orchestrator.achat(
+                        message, callbacks=[tool_callback], llm_override=llm_override, user_id=user_id
+                    )
                     await manager.send_message(client_id, {
                         "type": "assistant_message",
                         "content": response,
@@ -159,6 +189,9 @@ async def handle_chat_websocket(websocket: WebSocket, client_id: str, orchestrat
                         # Get reasoning model response
                         if orchestrator.llm_wrapper.is_multi_model and orchestrator.llm_wrapper._multi_model_manager:
                             if "reasoning" in orchestrator.llm_wrapper._multi_model_manager.models:
+                                # Add user message once for the reasoning path
+                                orchestrator.conversation.add_message("user", message)
+
                                 # Notify reasoning phase
                                 await manager.send_message(client_id, {
                                     "type": "reasoning",
@@ -167,7 +200,7 @@ async def handle_chat_websocket(websocket: WebSocket, client_id: str, orchestrat
                                 
                                 # Get reasoning from reasoning model
                                 reasoning_model = orchestrator.llm_wrapper._multi_model_manager.models["reasoning"]
-                                chunks = orchestrator.rag_store.search_chunks(message, top_k=5)
+                                chunks = orchestrator.rag_store.search_chunks(message, top_k=5, user_id=user_id)
                                 
                                 # Build reasoning prompt
                                 from ..rag.context_builder import ContextBuilder
@@ -242,7 +275,6 @@ Assistant:"""
                                         "type": "stream_token",
                                         "content": chunk
                                     })
-                                    await asyncio.sleep(0.01)
                                 
                                 # Send completion
                                 await manager.send_message(client_id, {
@@ -255,14 +287,14 @@ Assistant:"""
                                 orchestrator._prune_history()
                             else:
                                 # No reasoning model, use main
-                                await stream_simple_response(websocket, client_id, message, orchestrator, use_reasoning=False)
+                                await stream_simple_response(websocket, client_id, message, orchestrator, use_reasoning=False, user_id=user_id)
                         else:
                             # Multi-model not available, fallback
-                            await stream_simple_response(websocket, client_id, message, orchestrator, use_reasoning=False)
+                            await stream_simple_response(websocket, client_id, message, orchestrator, use_reasoning=False, user_id=user_id)
                             
                     except ValueError as e:
                         logger.warning(f"Reasoning mode not available: {str(e)}")
-                        await stream_simple_response(websocket, client_id, message, orchestrator, use_reasoning=False)
+                        await stream_simple_response(websocket, client_id, message, orchestrator, use_reasoning=False, user_id=user_id)
                 else:
                     # Simple mode with streaming
                     await stream_simple_response(
@@ -270,7 +302,8 @@ Assistant:"""
                         client_id, 
                         message, 
                         orchestrator,
-                        use_reasoning=False
+                        use_reasoning=False,
+                        user_id=user_id
                     )
             
             except Exception as e:
@@ -290,13 +323,16 @@ Assistant:"""
         cleanup_client(client_id)
 
 
-async def stream_simple_response(websocket: WebSocket, client_id: str, message: str, orchestrator, use_reasoning: bool = False):
+async def stream_simple_response(websocket: WebSocket, client_id: str, message: str, orchestrator, use_reasoning: bool = False, user_id: Optional[str] = None):
     """Stream a simple response token by token."""
     from ..rag.context_builder import ContextBuilder
     from ..llm.prompts import SYSTEM_PROMPT
 
-    # Search RAG for context
-    raw_chunks = orchestrator.rag_store.search_chunks(message, top_k=5)
+    # Record user message in history (caller no longer pre-adds to avoid double-insertion)
+    orchestrator.conversation.add_message("user", message)
+
+    # Search RAG for context (scoped to this user's own documents)
+    raw_chunks = orchestrator.rag_store.search_chunks(message, top_k=5, user_id=user_id)
 
     # --- Security: filter document chunks ---
     safe_chunks = []
@@ -354,7 +390,6 @@ async def stream_simple_response(websocket: WebSocket, client_id: str, message: 
                 "type": "stream_token",
                 "content": chunk
             })
-            await asyncio.sleep(0.01)  # Small delay for smooth streaming
         
         # Send completion signal
         await manager.send_message(client_id, {

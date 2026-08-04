@@ -10,7 +10,7 @@ interface Props {
   onSelect: (kw: Keyword | null) => void;
 }
 
-const KW_POLL_MS = 60_000;
+const KW_POLL_MS = 10_000;
 
 export default function KeywordPanel({ selectedKeywordId, onSelect }: Props) {
   const { theme } = useTheme();

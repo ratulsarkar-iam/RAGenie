@@ -28,6 +28,7 @@ class Document(BaseModel):
     file_type: str = Field(description="File type (txt, pdf, md, etc.)")
     file_size: int = Field(default=0, description="File size in bytes")
     content_hash: str = Field(description="Hash of content for duplicate detection")
+    user_id: str = Field(default="", description="Owning user's id — scopes visibility per user, like news keywords")
     chunks: List[Chunk] = Field(default_factory=list, description="Document chunks")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     created_at: datetime = Field(default_factory=datetime.now, description="Creation timestamp")

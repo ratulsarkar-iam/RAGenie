@@ -38,7 +38,8 @@ class ArticleStore:
                     published_at    TEXT,
                     fetched_at      TEXT NOT NULL,
                     is_summarised   INTEGER NOT NULL DEFAULT 0,
-                    rag_doc_id      TEXT
+                    rag_doc_id      TEXT,
+                    image_url       TEXT
                 )
             """)
             conn.execute("""
@@ -50,6 +51,10 @@ class ArticleStore:
                     FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE CASCADE
                 )
             """)
+            # Migrate existing databases that pre-date the image_url column
+            existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(articles)").fetchall()}
+            if "image_url" not in existing_cols:
+                conn.execute("ALTER TABLE articles ADD COLUMN image_url TEXT")
             conn.commit()
 
     def _row_to_article(self, row: tuple) -> Article:
@@ -59,6 +64,7 @@ class ArticleStore:
             published_at=datetime.fromisoformat(row[6]) if row[6] else None,
             fetched_at=datetime.fromisoformat(row[7]),
             is_summarised=bool(row[8]), rag_doc_id=row[9],
+            image_url=row[10] if len(row) > 10 else None,
         )
 
     def save(self, article: Article) -> bool:
@@ -66,12 +72,13 @@ class ArticleStore:
             with sqlite3.connect(self.db_path) as conn:
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO articles "
-                    "(id,keyword_id,title,content,url,source,published_at,fetched_at,is_summarised,rag_doc_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    "(id,keyword_id,title,content,url,source,published_at,fetched_at,is_summarised,rag_doc_id,image_url) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (article.id, article.keyword_id, article.title, article.content,
                      article.url, article.source,
                      article.published_at.isoformat() if article.published_at else None,
-                     article.fetched_at.isoformat(), int(article.is_summarised), article.rag_doc_id),
+                     article.fetched_at.isoformat(), int(article.is_summarised), article.rag_doc_id,
+                     article.image_url),
                 )
                 conn.commit()
             return cur.rowcount > 0
@@ -110,14 +117,15 @@ class ArticleStore:
             rows = conn.execute(sql, params).fetchall()
         result = []
         for row in rows:
-            article = self._row_to_article(row[:10])
+            article = self._row_to_article(row[:11])
             result.append(ArticleWithSummary(
                 id=article.id, keyword_id=article.keyword_id,
                 title=article.title, content=article.content,
                 url=article.url, source=article.source,
                 published_at=article.published_at, fetched_at=article.fetched_at,
                 is_summarised=article.is_summarised, rag_doc_id=article.rag_doc_id,
-                summary=row[10], summary_model=row[11],
+                image_url=article.image_url,
+                summary=row[11], summary_model=row[12],
             ))
         return result
 

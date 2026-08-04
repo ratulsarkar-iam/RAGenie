@@ -19,21 +19,24 @@ class IngestionPipeline:
         self.chunker = chunker
         self.loader = DocumentLoader()
     
-    def ingest_file(self, file_path: str) -> Document:
+    def ingest_file(self, file_path: str, user_id: str = "") -> Document:
         """Ingest a single file.
         
         Args:
             file_path: Path to the file
+            user_id: Owning user's id — scopes visibility/duplicate checks to that user,
+                same as news keywords are scoped per user.
             
         Returns:
             Ingested Document
         """
-        logger.info(f"Ingesting file: {file_path}")
+        logger.info(f"Ingesting file: {file_path} (user={user_id or 'unowned'})")
         
         # Load document
         doc = self.loader.load_file(file_path)
+        doc.user_id = user_id
         
-        # Check for duplicates
+        # Check for duplicates (scoped to this user only)
         if self._is_duplicate(doc):
             logger.warning(f"Duplicate document detected: {doc.filename}")
             raise DocumentIngestionError(f"Document already exists: {doc.filename}")
@@ -130,7 +133,8 @@ class IngestionPipeline:
         return ingested_docs
     
     def _is_duplicate(self, doc: Document) -> bool:
-        """Check if document is a duplicate based on content hash.
+        """Check if document is a duplicate based on content hash, scoped to
+        the same user (two different users may independently upload the same file).
         
         Args:
             doc: Document to check
@@ -138,7 +142,7 @@ class IngestionPipeline:
         Returns:
             True if duplicate exists
         """
-        for existing_doc in self.store.list_documents():
+        for existing_doc in self.store.list_documents(user_id=doc.user_id or None):
             if existing_doc.content_hash == doc.content_hash:
                 return True
         return False

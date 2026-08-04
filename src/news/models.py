@@ -13,6 +13,7 @@ class KeywordCreate(BaseModel):
 
 class Keyword(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str = ""
     term: str
     enabled: bool = True
     fetch_interval_minutes: int = 60
@@ -36,6 +37,7 @@ class RawArticle(BaseModel):
     url: str
     source: str
     published_at: Optional[datetime] = None
+    image_url: Optional[str] = None
 
 
 class Article(BaseModel):
@@ -49,6 +51,7 @@ class Article(BaseModel):
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_summarised: bool = False
     rag_doc_id: Optional[str] = None
+    image_url: Optional[str] = None
 
 
 class ArticleSummary(BaseModel):
@@ -69,5 +72,6 @@ class ArticleWithSummary(BaseModel):
     fetched_at: datetime
     is_summarised: bool
     rag_doc_id: Optional[str] = None
+    image_url: Optional[str] = None
     summary: Optional[str] = None
     summary_model: Optional[str] = None

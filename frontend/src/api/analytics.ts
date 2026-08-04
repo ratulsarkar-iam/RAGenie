@@ -1,4 +1,13 @@
+import { authHeader } from './authToken';
+
 const API_BASE_URL = 'http://localhost:8000';
+
+function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  return fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), ...authHeader() },
+  });
+}
 
 export interface DatasetInfo {
   dataset_id: string;
@@ -29,7 +38,7 @@ export const analyticsAPI = {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await fetch(`${API_BASE_URL}/analytics/upload`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/upload`, {
       method: 'POST',
       body: formData,
     });
@@ -43,7 +52,7 @@ export const analyticsAPI = {
   },
 
   async registerFilePath(filePath: string): Promise<DatasetInfo> {
-    const response = await fetch(`${API_BASE_URL}/analytics/register-path`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/register-path`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_path: filePath }),
@@ -65,7 +74,7 @@ export const analyticsAPI = {
     errors: string[];
     message?: string;
   }> {
-    const response = await fetch(`${API_BASE_URL}/analytics/register-folder`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/register-folder`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder_path: folderPath, pattern }),
@@ -87,26 +96,26 @@ export const analyticsAPI = {
   },
 
   async listDatasets(): Promise<{ datasets: DatasetInfo[] }> {
-    const response = await fetch(`${API_BASE_URL}/analytics/datasets`);
+    const response = await authFetch(`${API_BASE_URL}/analytics/datasets`);
     if (!response.ok) throw new Error('Failed to fetch datasets');
     return response.json();
   },
 
   async getDatasetInfo(datasetId: string): Promise<DatasetInfo> {
-    const response = await fetch(`${API_BASE_URL}/analytics/datasets/${datasetId}`);
+    const response = await authFetch(`${API_BASE_URL}/analytics/datasets/${datasetId}`);
     if (!response.ok) throw new Error('Failed to fetch dataset info');
     return response.json();
   },
 
   async deleteDataset(datasetId: string): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/analytics/datasets/${datasetId}`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/datasets/${datasetId}`, {
       method: 'DELETE',
     });
     if (!response.ok) throw new Error('Failed to delete dataset');
   },
 
   async analyzeBasic(datasetId: string): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE_URL}/analytics/analyze/basic`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/analyze/basic`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_id: datasetId, analysis_type: 'basic' }),
@@ -116,7 +125,7 @@ export const analyticsAPI = {
   },
 
   async analyzeAdvanced(datasetId: string): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE_URL}/analytics/analyze/advanced`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/analyze/advanced`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_id: datasetId, analysis_type: 'advanced' }),
@@ -126,7 +135,7 @@ export const analyticsAPI = {
   },
 
   async detectOutliers(datasetId: string, method: string = 'iqr'): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE_URL}/analytics/analyze/outliers`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/analyze/outliers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -140,7 +149,7 @@ export const analyticsAPI = {
   },
 
   async getInsights(datasetId: string): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE_URL}/analytics/analyze/insights`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/analyze/insights`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_id: datasetId, analysis_type: 'insights' }),
@@ -155,7 +164,7 @@ export const analyticsAPI = {
     featureColumns?: string[],
     modelType: string = 'linear'
   ): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE_URL}/analytics/predict/regression`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/predict/regression`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -175,7 +184,7 @@ export const analyticsAPI = {
     timeColumn?: string,
     periods: number = 10
   ): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE_URL}/analytics/predict/future`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/predict/future`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -193,7 +202,7 @@ export const analyticsAPI = {
     plotType: string,
     params: any
   ): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE_URL}/analytics/visualize`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/visualize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -207,7 +216,7 @@ export const analyticsAPI = {
   },
 
   async autoVisualize(datasetId: string): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE_URL}/analytics/visualize/auto`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/visualize/auto`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_id: datasetId, analysis_type: 'auto' }),
@@ -217,7 +226,7 @@ export const analyticsAPI = {
   },
 
   async completeAnalysis(datasetId: string): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE_URL}/analytics/analyze/complete`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/analyze/complete`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_id: datasetId, analysis_type: 'complete' }),
@@ -227,7 +236,7 @@ export const analyticsAPI = {
   },
 
   async summarizeDocument(datasetId: string): Promise<AnalysisResult> {
-    const response = await fetch(`${API_BASE_URL}/analytics/analyze/summarize`, {
+    const response = await authFetch(`${API_BASE_URL}/analytics/analyze/summarize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dataset_id: datasetId, analysis_type: 'summarize' }),

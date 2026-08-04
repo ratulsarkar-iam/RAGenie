@@ -14,6 +14,7 @@ class ConnectionStatus(str, Enum):
 
 class ServerConfig(BaseModel):
     id: str
+    user_id: str = ""
     name: str
     transport: Literal["stdio", "sse", "http"]
     enabled: bool = True
@@ -110,7 +111,7 @@ class ToolCallTrace(BaseModel):
 
 
 class MCPChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., max_length=10_000)
     conversation_id: str = "mcp-chat-default"
     tool_filter: Optional[List[str]] = None  # None = all connected tools
 

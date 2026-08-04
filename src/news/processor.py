@@ -76,6 +76,7 @@ class ArticleProcessor:
                     source=raw.source,
                     published_at=raw.published_at,
                     fetched_at=datetime.now(timezone.utc),
+                    image_url=raw.image_url,
                 )
                 saved = self._store.save(article)
                 if not saved:

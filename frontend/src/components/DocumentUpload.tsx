@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { Upload, X, FileText, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
-import axios from 'axios'
 import { useTheme } from '../contexts/ThemeContext'
+import { uploadDocument } from '../api/chat'
 
 interface DocumentUploadProps {
   onUploadComplete: () => void
@@ -23,18 +23,11 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
     setUploadStatus('idle')
     setStatusMessage('')
 
-    const formData = new FormData()
-    formData.append('file', file)
-
     try {
-      const response = await axios.post('/api/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      })
+      const response = await uploadDocument(file)
 
       setUploadStatus('success')
-      setStatusMessage(`Successfully uploaded: ${response.data.filename} (${response.data.num_chunks} chunks)`)
+      setStatusMessage(`Successfully uploaded: ${response.filename} (${response.num_chunks} chunks)`)
       
       // Reset file input
       if (fileInputRef.current) {

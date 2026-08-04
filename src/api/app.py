@@ -1,6 +1,8 @@
-from fastapi import FastAPI, HTTPException, WebSocket, UploadFile, File
+import contextlib
+import re
+from fastapi import FastAPI, Depends, HTTPException, WebSocket, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import uvicorn
@@ -24,8 +26,10 @@ from .analytics_routes import router as analytics_router
 from .auth_routes import router as auth_router, init_auth_routes
 from .news_routes import router as news_router
 from .db_routes import router as db_router
+from .activity_routes import router as activity_router
 from ..auth.user_store import UserStore
-from ..auth.dependencies import set_user_store
+from ..auth.dependencies import set_user_store, set_auth_enabled, require_auth_when_enabled, require_auth
+from ..auth.models import User
 from ..memory.memory_store import MemoryStore
 from ..memory.memory_manager import MemoryManager
 from ..memory.models import MemoryType
@@ -38,6 +42,7 @@ from ..mcp.tools import set_dependencies as set_mcp_dependencies
 from ..mcp.server import start_mcp_server
 from ..mcp_client.server_store import ServerConfigStore as MCPClientStore
 from ..mcp_client.manager import MCPClientManager
+from ..mcp_client.multi_user_manager import MultiUserMCPManagerRegistry
 from .mcp_client_routes import router as mcp_client_router
 import asyncio
 import tempfile
@@ -84,6 +89,7 @@ app_state = {
     "proactive_task": None,
     "mcp_client_store": None,
     "mcp_client_manager": None,
+    "mcp_manager_registry": None,
 }
 
 # Create FastAPI app
@@ -102,15 +108,19 @@ except Exception:
 
 # Add security middleware (order matters: outermost runs first)
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(RateLimitMiddleware, enabled=True)
+try:
+    _rl_cfg = _early_config.security.rate_limiting
+except Exception:
+    _rl_cfg = None
+app.add_middleware(RateLimitMiddleware, enabled=True, config=_rl_cfg)
 
 # Add CORS middleware — origins sourced from config, not hardcoded
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 # Include routers
@@ -119,6 +129,7 @@ app.include_router(auth_router)
 app.include_router(news_router)
 app.include_router(db_router)
 app.include_router(mcp_client_router)
+app.include_router(activity_router)
 
 
 @app.on_event("startup")
@@ -138,13 +149,49 @@ async def startup_event():
 
     # Initialise auth system (always register the store; endpoints exist even when disabled)
     user_store = UserStore(config.auth.db_path)
+    app_state["user_store"] = user_store
     set_user_store(user_store)
-    init_auth_routes(user_store)
+    set_auth_enabled(config.auth.enabled)
+    init_auth_routes(user_store, config.email)
     if config.auth.enabled:
-        logger.info("Authentication system enabled")
+        logger.info("Authentication system enabled — endpoints require Bearer token")
     else:
         logger.info("Authentication system initialised (disabled — set auth.enabled=true to protect endpoints)")
-    
+
+    # Initialise activity log (per-user activity tracking)
+    if config.activity.enabled:
+        from ..activity.activity_store import ActivityStore
+        from ..activity.activity_logger import ActivityLogger
+        activity_store = ActivityStore(config.activity.store_path)
+        app_state["activity_store"] = activity_store
+        app_state["activity_logger"] = ActivityLogger(activity_store)
+        logger.info("Activity log initialised")
+
+    # One-time migration: assign legacy (pre-multi-user) keyword/mcp-server rows to the
+    # first-registered admin account, if one already exists.
+    try:
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(user_store.db_path) as _conn:
+            _conn.row_factory = _sqlite3.Row
+            _admin_row = _conn.execute(
+                "SELECT id FROM users WHERE role='admin' ORDER BY created_at ASC LIMIT 1"
+            ).fetchone()
+        if _admin_row:
+            _admin_id = _admin_row["id"]
+            from ..news.keyword_store import KeywordStore as _KWStoreMigrate
+            _kw_migrate_store = _KWStoreMigrate(config.news.db_path)
+            _kw_migrated = _kw_migrate_store.migrate_unowned_to(_admin_id)
+            from ..mcp_client.server_store import ServerConfigStore as _MCPStoreMigrate
+            _mcp_migrate_store = _MCPStoreMigrate(config.mcp_client.store_path)
+            _mcp_migrated = _mcp_migrate_store.migrate_unowned_to(_admin_id) if hasattr(_mcp_migrate_store, "migrate_unowned_to") else 0
+            if _kw_migrated or _mcp_migrated:
+                logger.info(
+                    f"Legacy data migration: {_kw_migrated} keyword(s) and {_mcp_migrated} "
+                    f"MCP server(s) assigned to admin user {_admin_id}"
+                )
+    except Exception as e:
+        logger.warning(f"Legacy data migration skipped/failed: {e}")
+
     # Initialize RAG store
     rag_store = PageIndexStore(config.rag.index_path)
     rag_store.load()
@@ -167,7 +214,9 @@ async def startup_event():
     if config.memory.enabled:
         logger.info("Memory system initialized")
 
-    # Initialise MCP client store and manager (before orchestrator so tools are available at start)
+    # Initialise MCP client store + per-user manager registry (before orchestrator so
+    # tools are available at start). Each user gets their own MCPClientManager with
+    # its own connections/tool registry — never shared across users.
     mcp_client_store = MCPClientStore(config.mcp_client.store_path)
     app_state["mcp_client_store"] = mcp_client_store
     if config.mcp_clients:
@@ -175,12 +224,24 @@ async def startup_event():
         if migrated:
             logger.info(f"Migrated {migrated} MCP client(s) from config.yaml to DB")
 
-    mcp_client_manager = MCPClientManager(mcp_client_store)
-    app_state["mcp_client_manager"] = mcp_client_manager
-    try:
-        await mcp_client_manager.initialize_all()
-    except Exception as e:
-        logger.warning(f"MCP client manager init warning: {e}")
+    def _on_user_mcp_tools_changed(user_id: str) -> None:
+        # Per-user MCP tools are resolved dynamically at chat-time (see
+        # ChatOrchestrator._get_dynamic_mcp_tools), so no global agent rebuild is
+        # needed here. Re-inject dependencies so the SSE server reflects changes.
+        from ..mcp.tools import set_dependencies as _set_mcp_deps
+        _set_mcp_deps(
+            rag_store=rag_store,
+            search_service=search_service,
+            orchestrator=app_state.get("orchestrator"),
+            task_engine=app_state.get("task_engine"),
+            news_service=app_state.get("news_service"),
+            mcp_client_manager=None,
+        )
+
+    mcp_manager_registry = MultiUserMCPManagerRegistry(
+        mcp_client_store, on_tools_changed=_on_user_mcp_tools_changed
+    )
+    app_state["mcp_manager_registry"] = mcp_manager_registry
 
     # Initialize chat orchestrator
     orchestrator = ChatOrchestrator(
@@ -189,24 +250,9 @@ async def startup_event():
         search_service=search_service,
         max_history=config.conversation.max_history,
         memory_manager=memory_manager,
-        mcp_client_manager=mcp_client_manager,
+        mcp_manager_registry=mcp_manager_registry,
     )
     app_state["orchestrator"] = orchestrator
-
-    # Register tools-changed callback so agent + SSE MCP server rebuild when servers connect/disconnect
-    def _on_mcp_tools_changed():
-        orchestrator.rebuild_tools()
-        # Re-inject mcp_client_manager so SSE server's get_tools() picks up new tools instantly
-        from ..mcp.tools import set_dependencies as _set_mcp_deps
-        _set_mcp_deps(
-            rag_store=rag_store,
-            search_service=search_service,
-            orchestrator=orchestrator,
-            task_engine=app_state.get("task_engine"),
-            news_service=app_state.get("news_service"),
-            mcp_client_manager=mcp_client_manager,
-        )
-    mcp_client_manager.set_tools_changed_callback(_on_mcp_tools_changed)
     
     # Initialize chunker and ingestion pipeline
     chunker = DocumentChunker(config.rag)
@@ -307,19 +353,24 @@ async def startup_event():
             logger.info(
                 f"News service started (retention cleanup removed {cleanup.deleted} expired articles)"
             )
+            # Wire news tools into the chat/voice agent now that the service is ready
+            _orch = app_state.get("orchestrator")
+            if _orch is not None:
+                _orch.set_news_service(news_svc)
         except Exception as e:
             logger.error(f"News service failed to initialise: {e}")
     else:
         logger.info("News service disabled (set news.enabled=true to activate)")
 
-    # Inject dependencies into MCP tool handlers — done last so news + MCP client are ready
+    # Inject dependencies into MCP tool handlers — done last so news + MCP client are ready.
+    # mcp_client_manager is None here since tool resolution is now per-user (see mcp_manager_registry).
     set_mcp_dependencies(
         rag_store=rag_store,
         search_service=search_service,
         orchestrator=orchestrator,
         task_engine=app_state.get("task_engine"),
         news_service=app_state.get("news_service"),
-        mcp_client_manager=app_state.get("mcp_client_manager"),
+        mcp_client_manager=None,
     )
 
     logger.info("RAG Chatbot API started successfully")
@@ -333,14 +384,21 @@ async def shutdown_event():
         news_svc.stop()
         logger.info("News service stopped")
 
-    mcp_mgr = app_state.get("mcp_client_manager")
-    if mcp_mgr:
-        await mcp_mgr.shutdown()
-        logger.info("MCP client manager shut down")
+    proactive_task = app_state.get("proactive_task")
+    if proactive_task and not proactive_task.done():
+        proactive_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await proactive_task
+        logger.info("Proactive engine task cancelled")
+
+    mcp_registry = app_state.get("mcp_manager_registry")
+    if mcp_registry:
+        await mcp_registry.shutdown_all()
+        logger.info("All per-user MCP client managers shut down")
 
 
 @app.get("/health", response_model=HealthResponse)
-async def health_check():
+async def health_check():  # health is intentionally public
     """Health check endpoint."""
     rag_store = app_state.get("rag_store")
     
@@ -356,14 +414,26 @@ async def health_check():
     )
 
 
+def _check_conversation_ownership(conversation_id: str, user_id: str) -> None:
+    """Registers ownership on first use; raises 404 on mismatch with a different owner."""
+    owners: Dict[str, str] = app_state.setdefault("conversation_owners", {})
+    owner = owners.get(conversation_id)
+    if owner is None:
+        owners[conversation_id] = user_id
+    elif owner != user_id:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, current_user: User = Depends(require_auth)):
     """Chat endpoint."""
     orchestrator = app_state.get("orchestrator")
     
     if orchestrator is None:
         raise HTTPException(status_code=503, detail="Service not initialized")
-    
+
+    _check_conversation_ownership(request.conversation_id, current_user.id)
+
     try:
         # Start or resume conversation
         if orchestrator.conversation is None or orchestrator.conversation.conversation_id != request.conversation_id:
@@ -371,28 +441,38 @@ async def chat(request: ChatRequest):
         
         # Generate response
         if request.use_agent:
-            response = await orchestrator.achat(request.message)
+            response = await orchestrator.achat(request.message, user_id=current_user.id)
         else:
-            response = orchestrator.chat_simple(request.message)
-        
+            response = orchestrator.chat_simple(request.message, user_id=current_user.id)
+
+        activity_logger = app_state.get("activity_logger")
+        if activity_logger:
+            activity_logger.log(
+                current_user.id, "chat_message",
+                f"Sent chat message ({'agent' if request.use_agent else 'simple'})",
+                {"conversation_id": request.conversation_id},
+            )
+
         return ChatResponse(
             response=response,
             conversation_id=request.conversation_id
         )
     
     except Exception as e:
-        logger.error(f"Chat error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Chat error", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Check server logs.")
 
 
 @app.get("/history/{conversation_id}")
-async def get_history(conversation_id: str):
+async def get_history(conversation_id: str, current_user: User = Depends(require_auth)):
     """Get conversation history."""
     orchestrator = app_state.get("orchestrator")
     
     if orchestrator is None:
         raise HTTPException(status_code=503, detail="Service not initialized")
-    
+
+    _check_conversation_ownership(conversation_id, current_user.id)
+
     if orchestrator.conversation is None or orchestrator.conversation.conversation_id != conversation_id:
         return {"messages": []}
     
@@ -400,13 +480,15 @@ async def get_history(conversation_id: str):
 
 
 @app.delete("/history/{conversation_id}")
-async def clear_history(conversation_id: str):
+async def clear_history(conversation_id: str, current_user: User = Depends(require_auth)):
     """Clear conversation history."""
     orchestrator = app_state.get("orchestrator")
     
     if orchestrator is None:
         raise HTTPException(status_code=503, detail="Service not initialized")
-    
+
+    _check_conversation_ownership(conversation_id, current_user.id)
+
     if orchestrator.conversation and orchestrator.conversation.conversation_id == conversation_id:
         orchestrator.clear_conversation()
     
@@ -414,14 +496,14 @@ async def clear_history(conversation_id: str):
 
 
 @app.get("/documents", response_model=List[DocumentInfo])
-async def list_documents():
-    """List all indexed documents."""
+async def list_documents(current_user: User = Depends(require_auth)):
+    """List documents owned by the current user."""
     rag_store = app_state.get("rag_store")
     
     if rag_store is None:
         raise HTTPException(status_code=503, detail="Service not initialized")
     
-    documents = rag_store.list_documents()
+    documents = rag_store.list_documents(user_id=current_user.id)
     
     return [
         DocumentInfo(
@@ -436,7 +518,7 @@ async def list_documents():
 
 
 @app.get("/documents/{doc_id}/summarize")
-async def summarize_document(doc_id: str):
+async def summarize_document(doc_id: str, current_user: User = Depends(require_auth)):
     """Generate a summary of a document using LLM."""
     rag_store = app_state.get("rag_store")
     orchestrator = app_state.get("orchestrator")
@@ -448,6 +530,8 @@ async def summarize_document(doc_id: str):
     doc = rag_store.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this document")
     
     try:
         # Collect content from chunks (limit to first 4000 words)
@@ -498,7 +582,6 @@ IMPORTANT: Use proper markdown syntax including headings (##), bullet points (-)
         response = orchestrator.chat_simple(prompt)
         
         # Extract keywords from response
-        import re
         keywords_list = []
         keywords_match = re.search(r'## Keywords\s*\n(.+?)(?:\n\n|\Z)', response, re.DOTALL)
         if keywords_match:
@@ -518,12 +601,12 @@ IMPORTANT: Use proper markdown syntax including headings (##), bullet points (-)
         }
     
     except Exception as e:
-        logger.error(f"Error summarizing document: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error summarizing document", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to generate document summary.")
 
 
 @app.delete("/documents/{doc_id}")
-async def delete_document(doc_id: str):
+async def delete_document(doc_id: str, current_user: User = Depends(require_auth)):
     """Delete a document from the index and remove the physical file."""
     rag_store = app_state.get("rag_store")
     config = app_state.get("config")
@@ -535,6 +618,8 @@ async def delete_document(doc_id: str):
     doc = rag_store.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if doc.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this document")
     
     # Delete from index
     success = rag_store.delete_document(doc_id)
@@ -558,7 +643,7 @@ async def delete_document(doc_id: str):
 
 
 @app.post("/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(file: UploadFile = File(...), current_user: User = Depends(require_auth)):
     """Upload and ingest a document. Saves to data/documents folder and chunks immediately."""
     ingestion_pipeline = app_state.get("ingestion_pipeline")
     rag_store = app_state.get("rag_store")
@@ -609,11 +694,19 @@ async def upload_document(file: UploadFile = File(...)):
         logger.info(f"Saved uploaded file to: {dest_path}")
         
         # Ingest the document (this will chunk it and add to index)
-        doc = ingestion_pipeline.ingest_file(str(dest_path))
+        doc = ingestion_pipeline.ingest_file(str(dest_path), user_id=current_user.id)
         
         # Save the index
         rag_store.save()
-        
+
+        activity_logger = app_state.get("activity_logger")
+        if activity_logger:
+            activity_logger.log(
+                current_user.id, "document_uploaded",
+                f"Uploaded document '{doc.filename}'",
+                {"doc_id": doc.doc_id, "num_chunks": len(doc.chunks)},
+            )
+
         return {
             "status": "success",
             "doc_id": doc.doc_id,
@@ -621,9 +714,9 @@ async def upload_document(file: UploadFile = File(...)):
             "num_chunks": len(doc.chunks),
             "file_path": str(dest_path)
         }
-    
+
     except Exception as e:
-        logger.error(f"Upload error: {str(e)}")
+        logger.error("Upload error", exc_info=True)
         # Clean up saved file if ingestion failed
         if dest_path.exists():
             try:
@@ -631,11 +724,11 @@ async def upload_document(file: UploadFile = File(...)):
                 logger.info(f"Cleaned up file after failed ingestion: {dest_path}")
             except Exception as cleanup_error:
                 logger.warning(f"Could not clean up file: {cleanup_error}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to process uploaded file.")
 
 
 @app.post("/chat-upload")
-async def chat_upload(file: UploadFile = File(...), message: str = ""):
+async def chat_upload(file: UploadFile = File(...), message: str = "", current_user: User = Depends(require_auth)):
     """Upload a file in chat context. Ingests the file and returns its doc_id and extracted content summary
     so the frontend can send a follow-up chat message referencing the file."""
     ingestion_pipeline = app_state.get("ingestion_pipeline")
@@ -681,7 +774,7 @@ async def chat_upload(file: UploadFile = File(...), message: str = ""):
         logger.info(f"Chat-upload saved file to: {dest_path}")
         
         # Ingest the file
-        doc = ingestion_pipeline.ingest_file(str(dest_path))
+        doc = ingestion_pipeline.ingest_file(str(dest_path), user_id=current_user.id)
         rag_store.save()
         
         # Build a content preview (first 500 chars)
@@ -711,7 +804,7 @@ async def chat_upload(file: UploadFile = File(...), message: str = ""):
                     pass
             
             # Find and return the existing document
-            existing_doc = next((d for d in rag_store.list_documents() if d.filename == filename), None)
+            existing_doc = next((d for d in rag_store.list_documents(user_id=current_user.id) if d.filename == filename), None)
             if existing_doc:
                 preview = existing_doc.content[:500] + ("..." if len(existing_doc.content) > 500 else "")
                 return {
@@ -736,21 +829,42 @@ async def chat_upload(file: UploadFile = File(...), message: str = ""):
 
 
 @app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: str):
-    """WebSocket endpoint for streaming chat."""
+async def websocket_endpoint(websocket: WebSocket, client_id: str, token: Optional[str] = None):
+    """WebSocket endpoint for streaming chat. Requires ?token=<jwt> query param."""
     orchestrator = app_state.get("orchestrator")
-    
+
     if orchestrator is None:
         await websocket.close(code=1011, reason="Service not initialized")
         return
-    
-    await handle_chat_websocket(websocket, client_id, orchestrator)
+
+    from ..auth.jwt_manager import decode_token
+    user_store: Optional[UserStore] = app_state.get("user_store")
+    current_user = None
+    if token:
+        try:
+            payload = decode_token(token)
+            if payload.get("type") != "refresh" and user_store is not None:
+                row = user_store.get_by_id(payload["sub"])
+                if row and row.get("is_active"):
+                    current_user = User(
+                        id=row["id"], email=row["email"], role=row["role"],
+                        is_active=bool(row["is_active"]), created_at=row.get("created_at", ""),
+                        last_login=row.get("last_login"),
+                    )
+        except Exception:
+            current_user = None
+
+    if current_user is None:
+        await websocket.close(code=4401, reason="unauthorized")
+        return
+
+    await handle_chat_websocket(websocket, client_id, orchestrator, current_user=current_user)
 
 
 # ── Memory Endpoints ────────────────────────────────────────────────────────
 
 class MemoryStoreRequest(BaseModel):
-    content: str
+    content: str = Field(..., max_length=10_000)
     memory_type: str = "fact"
     metadata: Optional[Dict[str, Any]] = None
 
@@ -761,7 +875,7 @@ class LearningGoalsRequest(BaseModel):
     goals: List[str]
 
 @app.post("/api/memory/store")
-async def store_memory(request: MemoryStoreRequest):
+async def store_memory(request: MemoryStoreRequest, _auth=Depends(require_auth)):
     memory_manager: Optional[MemoryManager] = app_state.get("memory_manager")
     if memory_manager is None:
         raise HTTPException(status_code=503, detail="Memory system not enabled")
@@ -773,15 +887,18 @@ async def store_memory(request: MemoryStoreRequest):
     return {"memory_id": memory_id, "status": "stored"}
 
 @app.get("/api/memory/search")
-async def search_memories(q: str, limit: int = 10):
+async def search_memories(q: str, limit: int = 10, current_user: User = Depends(require_auth)):
     memory_store: Optional[MemoryStore] = app_state.get("memory_store")
     if memory_store is None:
         raise HTTPException(status_code=503, detail="Memory system not enabled")
     memories = memory_store.retrieve_memories(q, limit=limit)
+    activity_logger = app_state.get("activity_logger")
+    if activity_logger:
+        activity_logger.log(current_user.id, "memory_search", f"Searched memory for: {q[:100]}")
     return {"memories": [m.model_dump() for m in memories], "count": len(memories)}
 
 @app.put("/api/memory/preferences")
-async def update_preferences(request: PreferencesRequest):
+async def update_preferences(request: PreferencesRequest, _auth=Depends(require_auth)):
     memory_manager: Optional[MemoryManager] = app_state.get("memory_manager")
     if memory_manager is None:
         raise HTTPException(status_code=503, detail="Memory system not enabled")
@@ -789,14 +906,14 @@ async def update_preferences(request: PreferencesRequest):
     return {"status": "updated"}
 
 @app.get("/api/memory/profile")
-async def get_profile():
+async def get_profile(_auth=Depends(require_auth)):
     memory_manager: Optional[MemoryManager] = app_state.get("memory_manager")
     if memory_manager is None:
         raise HTTPException(status_code=503, detail="Memory system not enabled")
     return memory_manager.get_user_profile()
 
 @app.put("/api/memory/goals")
-async def set_learning_goals(request: LearningGoalsRequest):
+async def set_learning_goals(request: LearningGoalsRequest, _auth=Depends(require_auth)):
     memory_manager: Optional[MemoryManager] = app_state.get("memory_manager")
     if memory_manager is None:
         raise HTTPException(status_code=503, detail="Memory system not enabled")
@@ -807,15 +924,19 @@ async def set_learning_goals(request: LearningGoalsRequest):
 # ── Task Endpoints ───────────────────────────────────────────────────────────
 
 class TaskRequest(BaseModel):
-    request: str
+    request: str = Field(..., max_length=4_000)
     context: Optional[Dict[str, Any]] = None
 
 @app.post("/api/tasks/execute")
-async def execute_task(request: TaskRequest):
+async def execute_task(request: TaskRequest, _auth=Depends(require_auth)):
     task_engine: Optional[TaskEngine] = app_state.get("task_engine")
     if task_engine is None:
         raise HTTPException(status_code=503, detail="Task execution not enabled. Set tasks.enabled=true in config.")
-    result = await task_engine.execute_task(request.request, request.context)
+    try:
+        result = await task_engine.execute_task(request.request, request.context)
+    except Exception as e:
+        logger.error("Task execution error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Task execution failed.")
     return {"success": result.success, "summary": result.summary, "details": result.details}
 
 
@@ -824,18 +945,18 @@ async def execute_task(request: TaskRequest):
 class FeedbackRequest(BaseModel):
     message_id: str
     rating: str  # "thumbs_up" or "thumbs_down"
-    comment: Optional[str] = ""
-    topic: Optional[str] = None
+    comment: Optional[str] = Field(default="", max_length=2_000)
+    topic: Optional[str] = Field(default=None, max_length=200)
     metadata: Optional[Dict[str, Any]] = None
 
 class CorrectionRequest(BaseModel):
     message_id: str
-    original_response: str
-    corrected_response: str
-    topic: Optional[str] = None
+    original_response: str = Field(..., max_length=10_000)
+    corrected_response: str = Field(..., max_length=10_000)
+    topic: Optional[str] = Field(default=None, max_length=200)
 
 @app.post("/api/feedback")
-async def submit_feedback(request: FeedbackRequest):
+async def submit_feedback(request: FeedbackRequest, _auth=Depends(require_auth)):
     feedback_collector: Optional[FeedbackCollector] = app_state.get("feedback_collector")
     learning_engine: Optional[LearningEngine] = app_state.get("learning_engine")
     if feedback_collector is None:
@@ -851,7 +972,7 @@ async def submit_feedback(request: FeedbackRequest):
     return {"status": "received", "feedback_id": feedback.id}
 
 @app.post("/api/feedback/correction")
-async def submit_correction(request: CorrectionRequest):
+async def submit_correction(request: CorrectionRequest, _auth=Depends(require_auth)):
     feedback_collector: Optional[FeedbackCollector] = app_state.get("feedback_collector")
     learning_engine: Optional[LearningEngine] = app_state.get("learning_engine")
     if feedback_collector is None:
@@ -867,14 +988,14 @@ async def submit_correction(request: CorrectionRequest):
     return {"status": "received", "feedback_id": feedback.id}
 
 @app.get("/api/learning/summary")
-async def get_learning_summary():
+async def get_learning_summary(_auth=Depends(require_auth)):
     learning_engine: Optional[LearningEngine] = app_state.get("learning_engine")
     if learning_engine is None:
         raise HTTPException(status_code=503, detail="Learning system not initialized")
     return learning_engine.get_learning_summary()
 
 @app.get("/api/feedback/stats")
-async def get_feedback_stats():
+async def get_feedback_stats(_auth=Depends(require_auth)):
     feedback_collector: Optional[FeedbackCollector] = app_state.get("feedback_collector")
     if feedback_collector is None:
         raise HTTPException(status_code=503, detail="Learning system not initialized")
@@ -884,7 +1005,7 @@ async def get_feedback_stats():
 # ── Proactive Endpoints ──────────────────────────────────────────────────────
 
 @app.post("/api/proactive/briefing")
-async def trigger_briefing():
+async def trigger_briefing(_auth=Depends(require_auth)):
     proactive_engine: Optional[ProactiveEngine] = app_state.get("proactive_engine")
     if proactive_engine is None:
         raise HTTPException(status_code=503, detail="Proactive engine not enabled. Set proactive.enabled=true in config.")
@@ -892,7 +1013,7 @@ async def trigger_briefing():
     return {"status": "briefing delivered"}
 
 @app.get("/api/proactive/due-reviews")
-async def get_due_reviews():
+async def get_due_reviews(_auth=Depends(require_auth)):
     proactive_engine: Optional[ProactiveEngine] = app_state.get("proactive_engine")
     if proactive_engine is None:
         raise HTTPException(status_code=503, detail="Proactive engine not enabled")

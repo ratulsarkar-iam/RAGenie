@@ -72,6 +72,7 @@ def _ssl_context() -> ssl.SSLContext:
 _SSL_CTX = _ssl_context()
 
 _HTML_TAG = re.compile(r"<[^>]+>")
+_IMG_SRC_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 _HTML_ENTITIES = {
     "&amp;": "&", "&lt;": "<", "&gt;": ">",
     "&quot;": '"', "&#39;": "'", "&nbsp;": " ",
@@ -83,6 +84,23 @@ def _strip_html(text: str) -> str:
     for ent, ch in _HTML_ENTITIES.items():
         text = text.replace(ent, ch)
     return " ".join(text.split())
+
+
+def _extract_image(item, ns: dict, desc_raw: str) -> Optional[str]:
+    """Return the first image URL found in media elements or description HTML."""
+    for tag in ("media:content", "media:thumbnail"):
+        el = item.find(tag, ns)
+        if el is not None:
+            url = el.get("url")
+            if url:
+                return url
+    enc = item.find("enclosure")
+    if enc is not None and enc.get("type", "").startswith("image/"):
+        url = enc.get("url")
+        if url:
+            return url
+    m = _IMG_SRC_RE.search(desc_raw)
+    return m.group(1) if m else None
 
 
 def _when_param(from_date: Optional[datetime]) -> str:
@@ -176,6 +194,7 @@ class NewsFetcher:
             if source and title.endswith(f" - {source}"):
                 title = title[: -(len(source) + 3)].strip()
 
+            image_url = _extract_image(item, ns, desc_raw)
             content = _strip_html(desc_raw)
 
             pub: Optional[datetime] = None
@@ -193,6 +212,7 @@ class NewsFetcher:
                         url=link,
                         source=source,
                         published_at=pub,
+                        image_url=image_url,
                     )
                 )
         return articles

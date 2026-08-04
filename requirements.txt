@@ -71,5 +71,15 @@ PyJWT>=2.8.0
 python-dotenv==1.0.0
 httpx>=0.27.1
 
+# Voice Assistant (Hey RAGenie)
+openwakeword>=0.6.0          # wake word detection (local, no API key)
+faster-whisper>=1.0.0        # speech-to-text (CoreML-accelerated on Apple Silicon)
+edge-tts>=6.1.9              # TTS via Microsoft Edge neural voices (free, no API key)
+sounddevice>=0.4.6           # microphone capture + audio playback
+silero-vad>=5.1.0            # voice activity detection
+onnxruntime>=1.18.0          # ONNX runtime for openWakeWord + silero-vad
+pyttsx3>=2.90                # offline TTS fallback (uses macOS built-in voices)
+miniaudio>=1.57              # MP3/WAV/FLAC decode for sounddevice playback fallback
+
 # Frontend Build (optional, for serving React)
 # Frontend will be built separately with npm/vite

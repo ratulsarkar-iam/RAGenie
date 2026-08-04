@@ -1,3 +1,5 @@
+import { authHeader } from './authToken';
+
 const API_BASE_URL = 'http://localhost:8000';
 
 export interface Keyword {
@@ -29,6 +31,7 @@ export interface ArticleWithSummary {
   fetched_at: string;
   is_summarised: boolean;
   rag_doc_id: string | null;
+  image_url: string | null;
   summary: string | null;
   summary_model: string | null;
 }
@@ -41,8 +44,8 @@ export interface TranslationLanguage {
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${url}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: { 'Content-Type': 'application/json', ...authHeader(), ...(options?.headers || {}) },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));

@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from rank_bm25 import BM25Okapi
@@ -51,17 +52,35 @@ class PageIndexStore(DocumentStore):
         
         logger.debug(f"Rebuilt BM25 index with {len(self.chunks)} chunks")
     
-    def search(self, query: str, top_k: int = 3) -> List[Document]:
-        """Search for relevant documents using BM25."""
-        if not self.bm25 or not self.chunks:
-            logger.warning("No documents in index")
+    def _chunks_for_user(self, user_id: Optional[str]) -> List[Chunk]:
+        """Return the chunk pool to search over. ``user_id=None`` means no
+        filtering (used by system-internal/admin callers); otherwise only
+        chunks belonging to that user's own documents are returned — mirrors
+        how news keywords/articles are scoped per user."""
+        if user_id is None:
+            return self.chunks
+        owned_doc_ids = {d.doc_id for d in self.documents.values() if d.user_id == user_id}
+        return [c for c in self.chunks if c.doc_id in owned_doc_ids]
+
+    def search(self, query: str, top_k: int = 3, user_id: Optional[str] = None) -> List[Document]:
+        """Search for relevant documents using BM25, optionally scoped to a single user's own documents."""
+        chunks = self._chunks_for_user(user_id)
+        if not chunks:
+            logger.warning("No documents in index" if user_id is None else f"No documents for user {user_id}")
             return []
-        
+
+        if user_id is None:
+            bm25 = self.bm25
+            if bm25 is None:
+                return []
+        else:
+            bm25 = BM25Okapi([c.content.lower().split() for c in chunks])
+
         # Tokenize query
         tokenized_query = query.lower().split()
         
         # Get BM25 scores
-        scores = self.bm25.get_scores(tokenized_query)
+        scores = bm25.get_scores(tokenized_query)
         
         # Get top-k chunk indices
         top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
@@ -70,7 +89,7 @@ class PageIndexStore(DocumentStore):
         doc_ids = []
         results = []
         for idx in top_indices:
-            chunk = self.chunks[idx]
+            chunk = chunks[idx]
             if chunk.doc_id not in doc_ids:
                 doc_ids.append(chunk.doc_id)
                 if chunk.doc_id in self.documents:
@@ -79,12 +98,21 @@ class PageIndexStore(DocumentStore):
         logger.debug(f"Search for '{query}' returned {len(results)} documents")
         return results
     
-    def search_chunks(self, query: str, top_k: int = 3) -> List[Chunk]:
-        """Search for relevant chunks using BM25 with medical term expansion."""
-        if not self.bm25 or not self.chunks:
+    def search_chunks(self, query: str, top_k: int = 3, user_id: Optional[str] = None) -> List[Chunk]:
+        """Search for relevant chunks using BM25 with medical term expansion,
+        optionally scoped to a single user's own documents."""
+        chunks = self._chunks_for_user(user_id)
+        if not chunks:
             logger.debug("No chunks in index")
             return []
-        
+
+        if user_id is None:
+            bm25 = self.bm25
+            if bm25 is None:
+                return []
+        else:
+            bm25 = BM25Okapi([c.content.lower().split() for c in chunks])
+
         # Expand medical terminology
         expanded_query = self._expand_medical_terms(query)
         
@@ -92,11 +120,11 @@ class PageIndexStore(DocumentStore):
         tokenized_query = expanded_query.lower().split()
         
         # Get BM25 scores
-        scores = self.bm25.get_scores(tokenized_query)
+        scores = bm25.get_scores(tokenized_query)
         
         # Get top-k chunks
         top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-        results = [self.chunks[idx] for idx in top_indices]
+        results = [chunks[idx] for idx in top_indices]
         
         logger.debug(f"Search for '{query}' (expanded: '{expanded_query}') returned {len(results)} chunks")
         return results
@@ -155,12 +183,20 @@ class PageIndexStore(DocumentStore):
         self.bm25 = None
         logger.info("Deleted all documents from store")
     
-    def list_documents(self) -> List[Document]:
-        """List all documents in the store."""
-        return list(self.documents.values())
+    def list_documents(self, user_id: Optional[str] = None) -> List[Document]:
+        """List documents in the store. ``user_id=None`` returns every document
+        (system-internal/admin use); otherwise only that user's own documents."""
+        if user_id is None:
+            return list(self.documents.values())
+        return [d for d in self.documents.values() if d.user_id == user_id]
     
     def save(self) -> None:
-        """Persist the store to disk."""
+        """Persist the store to disk using an atomic write.
+
+        Writes to a sibling ``.tmp`` file first then calls ``os.replace()``
+        so a mid-write crash never leaves a corrupted index.
+        """
+        tmp_path = self.index_path.with_suffix(".tmp")
         try:
             data = {
                 "documents": {
@@ -168,12 +204,17 @@ class PageIndexStore(DocumentStore):
                 },
                 "chunks": [chunk.model_dump() for chunk in self.chunks]
             }
-            
-            with open(self.index_path, 'w') as f:
+
+            with open(tmp_path, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
-            
+
+            os.replace(tmp_path, self.index_path)
             logger.info(f"Saved index to {self.index_path}")
         except Exception as e:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
             raise DocumentStoreError(f"Failed to save index: {str(e)}")
     
     def load(self) -> None:
